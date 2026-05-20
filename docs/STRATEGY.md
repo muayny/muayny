@@ -22,7 +22,7 @@ There are deliberately no hand-tuned, broker-specific point thresholds (except o
 | Spread cap | A fraction of current ATR |
 | SL / TP / trailing | ATR — wider stops in volatile regimes, tighter in calm ones |
 
-## Entry — three aligned signals
+## Entry — four aligned checks
 
 ### 1. Trend filter — H1 EMA(50)
 Longs only when the last closed H1 bar closed above EMA(50); shorts only when below. Filters out the half of signals that fade the prevailing bias.
@@ -41,6 +41,14 @@ InpAtrLoFactor * avgATR  <=  ATR  <=  InpAtrHiFactor * avgATR
 - **Above the ceiling (3.00×):** the move likely already happened — entering here is buying a news spike.
 
 Because the gate is relative, it works on any broker's quote precision without re-tuning.
+
+### 4. Stochastic confirmation filter
+A breakout that fires when the market is already stretched tends to be the last buyer/seller in. A Stochastic oscillator on M30 (`InpStochTF`, default 5/3/3) is used purely as a veto:
+
+- A **long** breakout is rejected if M30 %K is at/above `InpStochOB` (80) — the move is already overbought — or if %K is below %D (M30 momentum disagrees).
+- A **short** breakout is rejected symmetrically at `InpStochOS` (20).
+
+The filter only ever blocks entries; it never creates them. If the Stochastic data is unavailable it fails open (does not block). This is the one piece of entry logic harvested from `Safe_Gold_Pro V3.1` — its martingale recovery tiers were deliberately not carried over.
 
 ## Dynamic position sizing
 
@@ -99,6 +107,7 @@ When any of these fires, the EA does not re-enter on the same bar; it waits for 
 - **Daily-loss circuit breaker.** If the day's loss exceeds `InpDailyLossPct` (4%) of the day's starting equity, no new entries open until the next day. Open positions are still managed. Protects against revenge-trading and clustered news-day losers.
 - **Dynamic spread filter.** Entries are blocked when spread exceeds `min(InpMaxSpreadAtrFrac × ATR, InpMaxSpreadHardPts)`.
 - **Session window** 13:00-22:00 server time (London + NY for GMT+2/+3 brokers) with a Friday cutoff 2h before close to avoid weekend gap risk.
+- **Weekend / holiday exit.** Using the broker's actual quote-session schedule (`SymbolInfoSessionQuote`, so DST and holidays are handled automatically), new entries are blocked `InpBlockNewMins` (120) minutes before the Friday or pre-holiday close, and all open positions are flattened `InpCloseAllMins` (15) minutes before it. Gold gaps hard over the weekend — this closes that exposure.
 - **Max one position per symbol.** No grid, no averaging into losers.
 - **Position adoption.** On attach/restart the EA adopts any pre-existing positions on its magic number so it keeps managing them (trend-flip and time-in-loss still apply; partial/failed-breakout are disabled for adopted trades since their history is unknown).
 

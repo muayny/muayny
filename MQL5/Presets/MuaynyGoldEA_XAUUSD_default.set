@@ -1,4 +1,4 @@
-; MuaynyGoldEA v2 default preset for XAUUSD (high-volatility regime)
+; MuaynyGoldEA v3 default preset for XAUUSD (high-volatility regime)
 ; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then in Strategy Tester
 ; or on an attached chart click "Load" and pick this file.
 ;
@@ -9,8 +9,10 @@
 ;
 ; Everything is dynamic: lot size scales with equity, risk scales down in
 ; drawdown, the volatility gate is relative to ATR's own average, and the
-; spread cap is a fraction of ATR. There are no broker-specific point
-; thresholds to hand-tune except the absolute spread hard cap.
+; spread cap is a fraction of ATR. A Stochastic(M30) filter blocks entries
+; into exhausted moves; positions are flattened before the weekend gap.
+;
+; Single position at a time. No martingale, no grid, no averaging down.
 ;
 ; NOT investment advice. Tune to your broker and your own risk tolerance.
 
@@ -20,6 +22,14 @@ InpTrendEMA=50
 InpEntryTF=15
 InpDonchianLen=20
 InpRequireMomentum=true
+
+InpUseStochFilter=true
+InpStochTF=30
+InpStochK=5
+InpStochD=3
+InpStochSlowing=3
+InpStochOB=80
+InpStochOS=20
 
 InpAtrPeriod=14
 InpAtrAvgPeriod=100
@@ -59,6 +69,12 @@ InpStartHour=13
 InpEndHour=22
 InpAvoidFriday=true
 InpMaxPositions=1
+
+InpUseWeekendExit=true
+InpBlockNewMins=120
+InpCloseAllMins=15
+
+InpShowDashboard=true
 
 InpMagic=20260520
 InpComment=MuaynyGold

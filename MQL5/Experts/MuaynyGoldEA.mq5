@@ -4,7 +4,16 @@
 //|  Adaptive Donchian-breakout Expert Advisor tuned for XAUUSD       |
 //|  (Gold) on a high-volatility regime.                              |
 //|                                                                  |
-//|  v2.00 — everything dynamic + self-correcting:                    |
+//|  v3.00 — integrates the non-martingale "good parts" harvested     |
+//|  from Safe_Gold_Pro V3.1, without its grid/recovery core:         |
+//|    - Stochastic (M30) confirmation filter: blocks breakout        |
+//|      entries that fire into an already-exhausted move.            |
+//|    - Weekend / holiday exit: closes positions before the          |
+//|      Friday (or pre-holiday) session close to avoid gap risk.     |
+//|    - On-chart dashboard for VPS monitoring.                        |
+//|  The martingale Emergency/Rescue/Recovery-Step tiers were         |
+//|  deliberately NOT carried over — they are the source of the       |
+//|  account-blowup tail risk.                                        |
 //|                                                                  |
 //|  DYNAMIC SIZING                                                   |
 //|    Lot size is derived from a % of live equity, so it scales      |
@@ -15,25 +24,20 @@
 //|                                                                   |
 //|  ADAPTIVE VOLATILITY GATE                                         |
 //|    Entries require ATR(M15) to sit within a band defined          |
-//|    relative to its own long-run average — no broker-specific      |
-//|    point thresholds to hand-tune.                                 |
+//|    relative to its own long-run average.                          |
 //|                                                                   |
 //|  SELF-CORRECTION (cut wrong trades early — don't get "dragged")   |
-//|    - Failed-breakout exit : close if price closes back through    |
-//|                             the level it broke out from.          |
-//|    - Trend-flip exit      : close if the H1 trend flips against    |
-//|                             the open position.                    |
-//|    - Time-in-loss exit    : close a position still underwater     |
-//|                             after N entry-TF bars.                 |
+//|    - Failed-breakout exit, trend-flip exit, time-in-loss exit.    |
 //|                                                                   |
-//|  PROFIT LOCKING (เก็บกำไร)                                        |
+//|  PROFIT LOCKING                                                   |
 //|    - Partial take-profit at a milestone, then SL to break-even.   |
 //|    - Break-even move + ATR trailing on the runner.                |
 //|                                                                   |
 //|  SAFETY NETS                                                      |
 //|    Daily-loss circuit breaker, dynamic spread filter, broker      |
-//|    stop-level enforcement, session/Friday filters, magic-number   |
-//|    isolation, max-positions cap.                                  |
+//|    stop-level enforcement, session/Friday/weekend filters,        |
+//|    magic-number isolation, max-positions cap. One position at a   |
+//|    time — never a grid, never averaging into a loser.             |
 //|                                                                   |
 //|  NOT INVESTMENT ADVICE. Past performance does not predict         |
 //|  future results. Backtest with realistic spreads, forward-test    |
@@ -41,9 +45,9 @@
 //+------------------------------------------------------------------+
 #property copyright "Muayny"
 #property link      ""
-#property version   "2.00"
+#property version   "3.00"
 #property strict
-#property description "Adaptive XAUUSD Donchian-breakout EA: dynamic sizing, self-correcting exits, profit locking, daily-loss circuit breaker."
+#property description "Adaptive XAUUSD Donchian-breakout EA: dynamic sizing, Stoch filter, self-correcting exits, profit locking, weekend exit, daily-loss breaker."
 
 #include <Trade/Trade.mqh>
 #include <Trade/PositionInfo.mqh>
@@ -57,6 +61,15 @@ input group "=== Entry (Donchian Breakout) ==="
 input ENUM_TIMEFRAMES InpEntryTF        = PERIOD_M15;   // Entry timeframe
 input int             InpDonchianLen    = 20;           // Donchian lookback (bars)
 input bool            InpRequireMomentum= true;         // Require breakout candle body in trade direction
+
+input group "=== Stochastic Confirmation Filter ==="
+input bool            InpUseStochFilter = true;         // Block entries that fire into an exhausted move
+input ENUM_TIMEFRAMES InpStochTF        = PERIOD_M30;   // Stochastic timeframe
+input int             InpStochK         = 5;            // %K period
+input int             InpStochD         = 3;            // %D period
+input int             InpStochSlowing   = 3;            // Slowing
+input int             InpStochOB        = 80;           // Overbought — no longs at/above this
+input int             InpStochOS        = 20;           // Oversold — no shorts at/below this
 
 input group "=== Adaptive Volatility Gate ==="
 input int             InpAtrPeriod      = 14;           // ATR period
@@ -104,6 +117,14 @@ input int             InpEndHour        = 22;           // Trading window end ho
 input bool            InpAvoidFriday    = true;         // Stop new entries 2h before EndHour on Friday
 input int             InpMaxPositions   = 1;            // Max simultaneous positions per symbol
 
+input group "=== Weekend / Holiday Exit ==="
+input bool            InpUseWeekendExit = true;         // Close positions before the weekend / holiday gap
+input int             InpBlockNewMins   = 120;          // Block new entries N minutes before Fri/pre-holiday close
+input int             InpCloseAllMins   = 15;           // Close all own positions N minutes before that close
+
+input group "=== Dashboard ==="
+input bool            InpShowDashboard  = true;         // Draw the on-chart status panel
+
 input group "=== Identification ==="
 input long            InpMagic          = 20260520;     // Magic number
 input string          InpComment        = "MuaynyGold"; // Order comment
@@ -123,12 +144,22 @@ PosState g_states[];
 //--- globals -------------------------------------------------------
 int      hTrendEMA      = INVALID_HANDLE;
 int      hAtr           = INVALID_HANDLE;
+int      hStoch         = INVALID_HANDLE;
 datetime g_lastBarTime  = 0;
 datetime g_dayStart     = 0;
 double   g_dayStartEquity = 0.0;
 bool     g_dayHalted    = false;
 double   g_equityPeak   = 0.0;
 CTrade   g_trade;
+
+//--- dashboard cache (filled in OnTick, read in OnTimer) -----------
+int      g_uiTrend      = 0;
+double   g_uiAtrNow     = 0.0;
+double   g_uiAtrAvg     = 0.0;
+bool     g_uiAtrOk      = false;
+string   g_uiState      = "init";
+
+#define UI_PREFIX "MGE_"
 
 //+------------------------------------------------------------------+
 //| Init                                                             |
@@ -137,8 +168,9 @@ int OnInit()
   {
    hTrendEMA = iMA(_Symbol, InpTrendTF, InpTrendEMA, 0, MODE_EMA, PRICE_CLOSE);
    hAtr      = iATR(_Symbol, InpEntryTF, InpAtrPeriod);
+   hStoch    = iStochastic(_Symbol, InpStochTF, InpStochK, InpStochD, InpStochSlowing, MODE_SMA, STO_LOWHIGH);
 
-   if(hTrendEMA == INVALID_HANDLE || hAtr == INVALID_HANDLE)
+   if(hTrendEMA == INVALID_HANDLE || hAtr == INVALID_HANDLE || hStoch == INVALID_HANDLE)
      {
       Print("MuaynyGoldEA: failed to create indicator handles.");
       return INIT_FAILED;
@@ -146,7 +178,7 @@ int OnInit()
 
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(20);
-   g_trade.SetTypeFillingBySymbol(_Symbol);
+   g_trade.SetTypeFillingBySymbol(_Symbol); // auto filling mode — covers BOTH open and close
    g_trade.LogLevel(LOG_LEVEL_ERRORS);
 
    if(InpBaseRiskPct <= 0.0 || InpBaseRiskPct > 5.0)
@@ -170,10 +202,15 @@ int OnInit()
    if(StringFind(sym, "XAU") < 0 && StringFind(sym, "GOLD") < 0)
       PrintFormat("MuaynyGoldEA: warning — symbol %s does not look like Gold. Defaults are tuned for XAUUSD.", _Symbol);
 
-   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_equityPeak = eq;
+   g_equityPeak = AccountInfoDouble(ACCOUNT_EQUITY);
    ResetDailyBaseline();
    AdoptExistingPositions();
+
+   if(InpShowDashboard)
+     {
+      EventSetTimer(2);
+      DrawDashboard();
+     }
    return INIT_SUCCEEDED;
   }
 
@@ -182,8 +219,21 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   EventKillTimer();
    if(hTrendEMA != INVALID_HANDLE) IndicatorRelease(hTrendEMA);
    if(hAtr      != INVALID_HANDLE) IndicatorRelease(hAtr);
+   if(hStoch    != INVALID_HANDLE) IndicatorRelease(hStoch);
+   ObjectsDeleteAll(0, UI_PREFIX);
+   Comment("");
+  }
+
+//+------------------------------------------------------------------+
+//| Timer — dashboard refresh only                                   |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   if(InpShowDashboard)
+      DrawDashboard();
   }
 
 //+------------------------------------------------------------------+
@@ -199,42 +249,54 @@ void OnTick()
 
    double atrNow = 0.0, atrAvg = 0.0;
    bool atrOk = GetAtrStats(atrNow, atrAvg);
+   g_uiAtrNow = atrNow;
+   g_uiAtrAvg = atrAvg;
+   g_uiAtrOk  = atrOk;
 
    if(atrOk)
       ManagePositionsTick(atrNow);
+
+   // Weekend/holiday exit runs every tick so positions close promptly.
+   bool weekendBlock = ManageWeekendExit();
 
    datetime barT = (datetime)iTime(_Symbol, InpEntryTF, 0);
    if(barT == 0 || barT == g_lastBarTime)
       return;
    g_lastBarTime = barT;
 
-   if(!atrOk) return;
+   if(!atrOk) { g_uiState = "warming up"; return; }
 
    int trend = GetTrendDirection();
+   g_uiTrend = trend;
 
    // --- self-correction runs before any new entry ---
    bool closedAny = ManagePositionsBar(trend);
    if(closedAny)
      {
       PruneStates();
-      return; // re-enter the correct side on a later bar, not the same tick
+      g_uiState = "self-correct exit";
+      return;
      }
 
    // --- entry gating ---
-   if(g_dayHalted)                            return;
-   if(trend == 0)                             return;
-   if(!IsTradingTime())                       return;
-   if(!IsSpreadOk(atrNow))                    return;
-   if(CountOwnPositions() >= InpMaxPositions)  return;
+   if(weekendBlock)                           { g_uiState = "weekend block";  return; }
+   if(g_dayHalted)                            { g_uiState = "daily halt";     return; }
+   if(trend == 0)                             { g_uiState = "no trend";       return; }
+   if(!IsTradingTime())                       { g_uiState = "out of session"; return; }
+   if(!IsSpreadOk(atrNow))                    { g_uiState = "spread too high";return; }
+   if(CountOwnPositions() >= InpMaxPositions)  { g_uiState = "position open";  return; }
 
-   if(atrNow < InpAtrLoFactor * atrAvg)        return; // too quiet
-   if(atrNow > InpAtrHiFactor * atrAvg)        return; // shock / news spike
+   if(atrNow < InpAtrLoFactor * atrAvg)        { g_uiState = "ATR too quiet";  return; }
+   if(atrNow > InpAtrHiFactor * atrAvg)        { g_uiState = "ATR shock";      return; }
 
    double triggerLevel = 0.0;
    int signal = GetBreakoutSignal(trend, triggerLevel);
-   if(signal == 0) return;
+   if(signal == 0)                            { g_uiState = "waiting breakout"; return; }
+
+   if(!StochConfirms(signal))                 { g_uiState = "stoch blocked";  return; }
 
    PlaceEntry(signal, atrNow, triggerLevel);
+   g_uiState = "entry sent";
   }
 
 //+------------------------------------------------------------------+
@@ -293,6 +355,28 @@ int GetBreakoutSignal(int trendDir, double &triggerLevel)
       return -1;
      }
    return 0;
+  }
+
+//+------------------------------------------------------------------+
+//| Stochastic confirmation: block entries into an exhausted move     |
+//| Fails open (returns true) if data is unavailable.                 |
+//+------------------------------------------------------------------+
+bool StochConfirms(int dir)
+  {
+   if(!InpUseStochFilter) return true;
+
+   double k[], d[];
+   ArraySetAsSeries(k, true);
+   ArraySetAsSeries(d, true);
+   if(CopyBuffer(hStoch, MAIN_LINE,   0, 2, k) < 2) return true;
+   if(CopyBuffer(hStoch, SIGNAL_LINE, 0, 2, d) < 2) return true;
+
+   double kk = k[1]; // last closed Stoch bar
+   double dd = d[1];
+
+   if(dir > 0)
+      return (kk < (double)InpStochOB && kk >= dd); // not overbought + %K above %D
+   return (kk > (double)InpStochOS && kk <= dd);    // not oversold   + %K below %D
   }
 
 //+------------------------------------------------------------------+
@@ -499,7 +583,6 @@ void DoPartialClose(int si, double currentVolume)
       closeVol = MathFloor(closeVol / lotStep) * lotStep;
    closeVol = NormalizeDouble(closeVol, 2);
 
-   // Can't split without leaving a sub-minimum remainder — skip cleanly.
    if(closeVol < minLot || (currentVolume - closeVol) < minLot)
      {
       g_states[si].partialDone = true;
@@ -550,6 +633,23 @@ bool CloseOwnPosition(ulong ticket, string reason)
    PrintFormat("MuaynyGoldEA: close #%I64u failed (%s) retcode=%d.",
                ticket, reason, g_trade.ResultRetcode());
    return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Close every position owned by this EA                            |
+//+------------------------------------------------------------------+
+bool CloseAllOwnPositions(string reason)
+  {
+   bool closedAny = false;
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+      if(CloseOwnPosition(pos.Ticket(), reason))
+         closedAny = true;
+     }
+   return closedAny;
   }
 
 //+------------------------------------------------------------------+
@@ -709,6 +809,50 @@ bool IsTradingTime()
   }
 
 //+------------------------------------------------------------------+
+//| Weekend / holiday exit. Closes own positions before the          |
+//| Friday (or pre-holiday) session close and returns true while     |
+//| new entries should be blocked.                                    |
+//+------------------------------------------------------------------+
+bool ManageWeekendExit()
+  {
+   if(!InpUseWeekendExit) return false;
+
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+
+   datetime from, to;
+   if(!SymbolInfoSessionQuote(_Symbol, (ENUM_DAY_OF_WEEK)dt.day_of_week, 0, from, to))
+      return false; // no session info today
+
+   datetime dayStart   = now - (now % 86400);
+   datetime sessionEnd = dayStart + to;
+   long     secsToClose= (long)(sessionEnd - now);
+
+   // Is tomorrow a holiday (no quote session at all)?
+   MqlDateTime tdt;
+   TimeToStruct(now + 86400, tdt);
+   datetime tf, tt;
+   bool tomorrowHoliday = !SymbolInfoSessionQuote(_Symbol, (ENUM_DAY_OF_WEEK)tdt.day_of_week, 0, tf, tt);
+
+   bool preWeekend = (dt.day_of_week == FRIDAY || tomorrowHoliday);
+   if(!preWeekend) return false;
+   if(secsToClose <= 0) return true;
+
+   if(secsToClose <= InpCloseAllMins * 60)
+     {
+      if(CountOwnPositions() > 0)
+        {
+         CloseAllOwnPositions("weekend-exit");
+         PruneStates();
+        }
+      return true;
+     }
+
+   return (secsToClose <= InpBlockNewMins * 60);
+  }
+
+//+------------------------------------------------------------------+
 //| Daily-loss circuit breaker                                        |
 //+------------------------------------------------------------------+
 void ResetDailyBaseline()
@@ -739,5 +883,119 @@ void RollDailyBaseline()
       PrintFormat("MuaynyGoldEA: daily-loss circuit breaker tripped. Loss=%.2f%% >= %.2f%%. No new entries today.",
                   lossPct, InpDailyLossPct);
      }
+  }
+
+//+------------------------------------------------------------------+
+//| Dashboard                                                        |
+//+------------------------------------------------------------------+
+void UiLabel(string key, int x, int y, string text, color clr, int fontSize)
+  {
+   string name = UI_PREFIX + key;
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+     }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString (0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetString (0, name, OBJPROP_FONT, "Consolas");
+  }
+
+void DrawDashboard()
+  {
+   int x = 12, y = 22, lh = 16;
+   string bg = UI_PREFIX + "BG";
+   if(ObjectFind(0, bg) < 0)
+     {
+      ObjectCreate(0, bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, bg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, bg, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, bg, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, bg, OBJPROP_BGCOLOR, C'18,18,26');
+      ObjectSetInteger(0, bg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, bg, OBJPROP_COLOR, clrGoldenrod);
+     }
+   ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, 6);
+   ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, 14);
+   ObjectSetInteger(0, bg, OBJPROP_XSIZE, 270);
+   ObjectSetInteger(0, bg, OBJPROP_YSIZE, 196);
+
+   bool algoOn = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)
+                 && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
+   UiLabel("title", x, y, "MuaynyGoldEA v3.0", clrGold, 10);
+   UiLabel("algo", x + 170, y, algoOn ? "ALGO ON" : "ALGO OFF",
+           algoOn ? clrLime : clrRed, 8);
+   y += lh + 4;
+
+   string trendTxt = (g_uiTrend > 0) ? "UP" : (g_uiTrend < 0 ? "DOWN" : "FLAT");
+   color  trendClr = (g_uiTrend > 0) ? clrLime : (g_uiTrend < 0 ? clrTomato : clrSilver);
+   UiLabel("trend", x, y, "Trend (H1):  " + trendTxt, trendClr, 9);
+   y += lh;
+
+   string atrTxt = "ATR regime:  ";
+   color  atrClr = clrSilver;
+   if(!g_uiAtrOk)                                  { atrTxt += "warming up"; }
+   else if(g_uiAtrNow < InpAtrLoFactor*g_uiAtrAvg) { atrTxt += "TOO QUIET"; atrClr = clrKhaki; }
+   else if(g_uiAtrNow > InpAtrHiFactor*g_uiAtrAvg) { atrTxt += "SHOCK";     atrClr = clrTomato; }
+   else                                            { atrTxt += "OK";        atrClr = clrLime; }
+   UiLabel("atr", x, y, atrTxt, atrClr, 9);
+   y += lh;
+
+   long   spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   double cap    = g_uiAtrOk ? (g_uiAtrNow/_Point)*InpMaxSpreadAtrFrac : 0.0;
+   UiLabel("spread", x, y,
+           StringFormat("Spread:      %d  (cap %d)", (int)spread, (int)cap),
+           (spread <= cap ? clrSilver : clrTomato), 9);
+   y += lh;
+
+   UiLabel("risk", x, y,
+           StringFormat("Risk now:    %.2f%%  (base %.2f%%)", CurrentRiskPct(), InpBaseRiskPct),
+           clrAqua, 9);
+   y += lh;
+
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double ddPct  = (g_equityPeak > 0.0) ? (g_equityPeak-equity)/g_equityPeak*100.0 : 0.0;
+   UiLabel("equity", x, y,
+           StringFormat("Equity: %.2f  DD %.2f%%", equity, ddPct),
+           (ddPct >= InpDDStartPct ? clrKhaki : clrSilver), 9);
+   y += lh;
+
+   double dayPL = equity - g_dayStartEquity;
+   UiLabel("daypl", x, y,
+           StringFormat("Day P/L: %.2f   limit -%.1f%%", dayPL, InpDailyLossPct),
+           (dayPL >= 0.0 ? clrLime : clrTomato), 9);
+   y += lh;
+
+   int    posN   = 0;
+   double posPL  = 0.0, posVol = 0.0;
+   int    posDir = 0;
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+      posN++;
+      posPL  += pos.Profit() + pos.Swap();
+      posVol += pos.Volume();
+      posDir  = (pos.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
+     }
+   string posTxt = (posN == 0)
+                   ? "Position:    flat"
+                   : StringFormat("Position: %s %.2f  P/L %.2f",
+                                  (posDir > 0 ? "BUY" : "SELL"), posVol, posPL);
+   UiLabel("pos", x, y, posTxt,
+           (posN == 0 ? clrSilver : (posPL >= 0.0 ? clrLime : clrTomato)), 9);
+   y += lh;
+
+   string stateTxt = g_dayHalted ? "DAILY HALT" : g_uiState;
+   UiLabel("state", x, y, "Status:      " + stateTxt,
+           (g_dayHalted ? clrTomato : clrGold), 9);
+
+   ChartRedraw(0);
   }
 //+------------------------------------------------------------------+

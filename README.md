@@ -31,6 +31,7 @@ docs/
 |-------------------|------------------------------------------------------------------|
 | Trend filter      | H1 EMA(50): trade only with the trend                            |
 | Entry             | M15 Donchian-20 breakout, close beyond level + momentum body     |
+| Entry confirm     | Stochastic(M30) filter — no entries into an exhausted move        |
 | Volatility gate   | ATR(M15,14) within 0.7×-3.0× of its 100-bar average (adaptive)   |
 | Stop loss         | 1.5 × ATR(M15)                                                   |
 | Take profit       | 3.0 × ATR(M15), with a partial close along the way               |
@@ -40,9 +41,16 @@ docs/
 | Self-correction   | Failed-breakout / trend-flip / time-in-loss early exits          |
 | Daily-loss stop   | Halt new entries after -4% equity on the day                     |
 | Session           | 13:00-22:00 server time (London + NY)                            |
+| Weekend exit      | Flatten positions ~15 min before the Friday/holiday close        |
 | Spread filter     | Dynamic: min(0.25 × ATR, 80 points)                              |
+| Monitoring        | On-chart dashboard (status, trend, ATR, risk, P&L, position)     |
 
 See `docs/STRATEGY.md` for the reasoning behind each piece.
+
+> **One position at a time. No martingale, no grid, no averaging down.**
+> The Stochastic filter, weekend-exit and dashboard were harvested from a
+> third-party EA (`Safe_Gold_Pro V3.1`); its grid/recovery core was
+> deliberately left out — that architecture is what blows accounts up.
 
 ### What "dynamic" means here
 
