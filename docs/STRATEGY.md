@@ -43,16 +43,18 @@ InpAtrLoFactor * avgATR  <=  ATR  <=  InpAtrHiFactor * avgATR
 
 Because the gate is relative, it works on any broker's quote precision without re-tuning.
 
-### 4. Stochastic confirmation filter
-A breakout that fires when the market is already stretched tends to be the last buyer/seller in. A Stochastic oscillator on M30 (`InpStochTF`, default 5/3/3) is used purely as a veto:
+### 4. Stochastic momentum agreement
+A Stochastic oscillator on M30 (`InpStochTF`, default 5/3/3) confirms that M30 momentum agrees with the trade:
 
-- A **long** breakout is rejected if M30 %K is at/above `InpStochOB` (80) — the move is already overbought — or if %K is below %D (M30 momentum disagrees).
-- A **short** breakout is rejected symmetrically at `InpStochOS` (20).
+- A **long** is rejected if M30 %K is below %D (momentum points down).
+- A **short** is rejected symmetrically.
 
-The filter only ever blocks entries; it never creates them. If the Stochastic data is unavailable it fails open (does not block). This is the one piece of entry logic harvested from `Safe_Gold_Pro V3.1` — its martingale recovery tiers were deliberately not carried over.
+By default that is the *whole* check. The optional `InpStochBlockExtreme` (default **off**) would additionally veto entries when %K sits in the overbought/oversold zone — but it is deliberately left off: in a strong trend the Stochastic stays pinned at the extreme for hours, so an overbought veto rejects exactly the strong-trend breakouts this strategy exists to catch. An OB/OS veto belongs to mean-reversion systems, not a trend-following breakout. (This was changed in v3.20 after the veto was observed skipping good trending entries.)
+
+The filter only ever blocks entries; it never creates them. If the Stochastic data is unavailable it fails open (does not block).
 
 ### 5. ADX trend-strength filter
-A breakout only follows through when there is a real trend behind it. ADX(M15, `InpAdxPeriod`) measures trend strength regardless of direction. An entry is rejected unless the last closed bar's ADX is at least `InpMinAdx` (default 22).
+A breakout only follows through when there is a real trend behind it. ADX(M15, `InpAdxPeriod`) measures trend strength regardless of direction. An entry is rejected unless the last closed bar's ADX is at least `InpMinAdx` (default 18 — ADX above ~18-20 indicates a developing or established trend).
 
 This is distinct from the volatility gate: ATR can be high while ADX is low — a volatile market with no direction, i.e. exactly the chop where breakouts fail. The ADX filter is what removes those false breakouts. Like the Stochastic filter it fails open if data is missing.
 

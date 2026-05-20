@@ -4,6 +4,12 @@
 //|  Adaptive Donchian-breakout Expert Advisor tuned for XAUUSD       |
 //|  (Gold) on a high-volatility regime.                              |
 //|                                                                  |
+//|  v3.20 — Stochastic filter no longer vetoes entries in the        |
+//|  overbought/oversold zone by default (that fought the trend-      |
+//|  following logic and skipped strong-trend breakouts); it now      |
+//|  only checks %K-vs-%D momentum agreement. ADX minimum lowered.    |
+//|  Both changes raise trade frequency in trending conditions.       |
+//|                                                                  |
 //|  v3.10 — balance-scaled position slots, ADX entry timing, and a   |
 //|  Thai-time session window:                                        |
 //|    - Max simultaneous positions scales with account balance.      |
@@ -45,7 +51,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Muayny"
 #property link      ""
-#property version   "3.10"
+#property version   "3.20"
 #property strict
 #property description "Adaptive XAUUSD Donchian-breakout EA: balance-scaled sizing & slots, ADX/Stoch filters, self-correcting exits, profit locking, weekend exit, daily-loss breaker."
 
@@ -63,18 +69,19 @@ input int             InpDonchianLen    = 20;           // Donchian lookback (ba
 input bool            InpRequireMomentum= true;         // Require breakout candle body in trade direction
 
 input group "=== Stochastic Confirmation Filter ==="
-input bool            InpUseStochFilter = true;         // Block entries that fire into an exhausted move
+input bool            InpUseStochFilter = true;         // Use Stochastic %K-vs-%D momentum agreement
+input bool            InpStochBlockExtreme= false;      // Also veto entries in the OB/OS zone (off = better for trends)
 input ENUM_TIMEFRAMES InpStochTF        = PERIOD_M30;   // Stochastic timeframe
 input int             InpStochK         = 5;            // %K period
 input int             InpStochD         = 3;            // %D period
 input int             InpStochSlowing   = 3;            // Slowing
-input int             InpStochOB        = 80;           // Overbought — no longs at/above this
-input int             InpStochOS        = 20;           // Oversold — no shorts at/below this
+input int             InpStochOB        = 80;           // Overbought level (used only if BlockExtreme)
+input int             InpStochOS        = 20;           // Oversold level (used only if BlockExtreme)
 
 input group "=== ADX Entry-Timing Filter ==="
 input bool            InpUseAdxFilter   = true;         // Require a minimum trend strength to enter
 input int             InpAdxPeriod      = 14;           // ADX period
-input double          InpMinAdx         = 22.0;         // Minimum ADX (trend strength) for an entry
+input double          InpMinAdx         = 18.0;         // Minimum ADX (trend strength) for an entry
 
 input group "=== Adaptive Volatility Gate ==="
 input int             InpAtrPeriod      = 14;           // ATR period
@@ -388,7 +395,10 @@ int GetBreakoutSignal(int trendDir, double &triggerLevel)
   }
 
 //+------------------------------------------------------------------+
-//| Stochastic confirmation: block entries into an exhausted move     |
+//| Stochastic confirmation. By default only checks %K-vs-%D          |
+//| momentum agreement; the OB/OS veto is opt-in (InpStochBlockExtreme)|
+//| because vetoing extremes fights a trend-following breakout — in   |
+//| a strong trend the Stochastic stays pinned in the OB/OS zone.     |
 //| Fails open (returns true) if data is unavailable.                 |
 //+------------------------------------------------------------------+
 bool StochConfirms(int dir)
@@ -405,8 +415,14 @@ bool StochConfirms(int dir)
    double dd = d[1];
 
    if(dir > 0)
-      return (kk < (double)InpStochOB && kk >= dd); // not overbought + %K above %D
-   return (kk > (double)InpStochOS && kk <= dd);    // not oversold   + %K below %D
+     {
+      if(kk < dd) return false;                                        // momentum disagrees
+      if(InpStochBlockExtreme && kk >= (double)InpStochOB) return false;
+      return true;
+     }
+   if(kk > dd) return false;                                           // momentum disagrees
+   if(InpStochBlockExtreme && kk <= (double)InpStochOS) return false;
+   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -1068,7 +1084,7 @@ void DrawDashboard()
 
    bool algoOn = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)
                  && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
-   UiLabel("title", x, y, "MuaynyGoldEA v3.1", clrGold, 10);
+   UiLabel("title", x, y, "MuaynyGoldEA v3.2", clrGold, 10);
    UiLabel("algo", x + 170, y, algoOn ? "ALGO ON" : "ALGO OFF",
            algoOn ? clrLime : clrRed, 8);
    y += lh + 4;

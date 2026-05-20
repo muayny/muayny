@@ -38,8 +38,8 @@ news-gap math that explains why the position-slot cap stays at 5.
 |-------------------|------------------------------------------------------------------|
 | Trend filter      | H1 EMA(50): trade only with the trend                            |
 | Entry             | M15 Donchian-20 breakout, close beyond level + momentum body     |
-| Entry confirm     | Stochastic(M30) — no entries into an exhausted move               |
-| Entry timing      | ADX(M15) ≥ 22 — skip weak / false breakouts in chop              |
+| Entry confirm     | Stochastic(M30) %K-vs-%D momentum agreement                       |
+| Entry timing      | ADX(M15) ≥ 18 — skip weak / false breakouts in chop              |
 | Volatility gate   | ATR(M15,14) within 0.7×-3.0× of its 100-bar average (adaptive)   |
 | Stop loss         | 1.5 × ATR(M15)                                                   |
 | Take profit       | 3.0 × ATR(M15), with a partial close along the way               |

@@ -31,6 +31,7 @@ InpDonchianLen=20
 InpRequireMomentum=true
 
 InpUseStochFilter=true
+InpStochBlockExtreme=false
 InpStochTF=30
 InpStochK=5
 InpStochD=3
@@ -40,7 +41,7 @@ InpStochOS=20
 
 InpUseAdxFilter=true
 InpAdxPeriod=14
-InpMinAdx=22.0
+InpMinAdx=18.0
 
 InpAtrPeriod=14
 InpAtrAvgPeriod=100
