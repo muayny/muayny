@@ -1,0 +1,16 @@
+# MetaTrader 5 compiled artifacts
+*.ex5
+*.ex4
+*.tpl
+
+# MetaEditor scratch
+*.log
+*.tmp
+.~lock.*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
