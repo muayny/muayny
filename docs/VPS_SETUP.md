@@ -55,7 +55,7 @@ Don't sit on the VPS all day. Set up two channels:
 
 ## When to disable the EA
 
-- **Major scheduled news** (FOMC, NFP, CPI) — even if you trust the daily-loss circuit breaker, spreads widen to 500+ points around these and slippage is brutal. Either disable AutoTrading 5 minutes before / 10 minutes after, or widen `InpMaxSpreadPts` temporarily and accept the risk.
+- **Major scheduled news** (FOMC, NFP, CPI) — even if you trust the daily-loss circuit breaker, spreads widen to 500+ points around these and slippage is brutal. Disable AutoTrading 5 minutes before / 10 minutes after. The dynamic spread filter and the `InpMaxSpreadHardPts` cap block most news-spike entries automatically, but manual disabling is still the safe choice.
 - **Anything weird in the journal:** "Connection lost", "Trade context busy", "Invalid stops" repeated > 5 times in a row. Disable, investigate, re-enable.
 - **Broker maintenance.** Most brokers post weekend maintenance windows. The EA's weekend filter handles Sat/Sun but not always Sunday-evening server resets.
 

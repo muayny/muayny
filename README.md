@@ -2,7 +2,7 @@
 
 MetaTrader 5 Expert Advisor for **XAUUSD (Gold)** in a high-volatility regime.
 
-Strategy: **Donchian breakout aligned with a higher-timeframe trend filter, ATR-based stops, fixed-percent risk sizing, and a daily-loss circuit breaker.**
+Strategy: **adaptive Donchian breakout aligned with a higher-timeframe trend filter — dynamic equity-scaled sizing, self-correcting early exits, partial-profit locking, and a daily-loss circuit breaker.**
 
 > NOT INVESTMENT ADVICE. Trading carries a substantial risk of loss. Past
 > performance — including backtests — does not predict future results.
@@ -27,20 +27,29 @@ docs/
 
 ## Strategy at a glance
 
-| Component        | Setting                                             |
-|------------------|-----------------------------------------------------|
-| Trend filter     | H1 EMA(50): trade only with the trend              |
-| Entry            | M15 Donchian-20 breakout, close beyond level        |
-| Volatility gate  | ATR(M15,14) between InpMinAtrPoints and InpMaxAtrPoints |
-| Stop loss        | 1.5 x ATR(M15)                                      |
-| Take profit      | 2.5 x ATR(M15) (R:R ~1:1.67)                        |
-| Trailing         | Break-even after 0.6 ATR, then trail 1.2 ATR        |
-| Risk per trade   | 0.5% of equity (lot size auto-derived)             |
-| Daily-loss stop  | Halt new entries after -3% equity on the day       |
-| Session          | 13:00-22:00 server time (London + NY)              |
-| Spread filter    | Max 50 points                                       |
+| Component         | Setting                                                          |
+|-------------------|------------------------------------------------------------------|
+| Trend filter      | H1 EMA(50): trade only with the trend                            |
+| Entry             | M15 Donchian-20 breakout, close beyond level + momentum body     |
+| Volatility gate   | ATR(M15,14) within 0.7×-3.0× of its 100-bar average (adaptive)   |
+| Stop loss         | 1.5 × ATR(M15)                                                   |
+| Take profit       | 3.0 × ATR(M15), with a partial close along the way               |
+| Profit locking    | Close 50% at +1.2 ATR, move SL to break-even, trail the runner   |
+| Position sizing   | % of **live equity** — lot scales up as the account grows        |
+| Adaptive risk     | Risk % cut automatically while in drawdown, restored on recovery |
+| Self-correction   | Failed-breakout / trend-flip / time-in-loss early exits          |
+| Daily-loss stop   | Halt new entries after -4% equity on the day                     |
+| Session           | 13:00-22:00 server time (London + NY)                            |
+| Spread filter     | Dynamic: min(0.25 × ATR, 80 points)                              |
 
-See `docs/STRATEGY.md` for the reasoning.
+See `docs/STRATEGY.md` for the reasoning behind each piece.
+
+### What "dynamic" means here
+
+- **Lot grows with the account.** Sizing is `equity × risk% / SL-distance`, so a bigger balance produces a bigger lot with no manual change.
+- **Risk shrinks when losing.** While the account is in drawdown from its equity peak, the risk % is scaled down toward a floor, then restored as it recovers — the opposite of a martingale.
+- **The bot cuts its own mistakes.** A trade is closed early — well before the hard stop loss — the moment its premise breaks: the breakout fails back through its trigger level, the H1 trend flips against it, or it sits underwater too long. Wrong trades are not left to be "dragged".
+- **Winners are banked.** Half the position is closed at a profit milestone and the rest is protected at break-even, so a trade that worked cannot turn back into a loss.
 
 ---
 

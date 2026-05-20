@@ -1,4 +1,4 @@
-# Strategy: Trend-aligned Donchian breakout on Gold
+# Strategy: adaptive, self-correcting Donchian breakout on Gold
 
 ## Why XAUUSD-specific
 
@@ -8,65 +8,103 @@ Gold has a few quirks that retail forex EAs handle badly:
 - **Bursty volatility.** Gold spends hours in tight ranges and then expands by 200-1000 points in minutes around FOMC, NFP, CPI, geopolitical headlines, or US session opens. Pullback / mean-reversion strategies get stopped repeatedly during these expansions.
 - **Strong trend persistence within expansions.** Once gold breaks a recent range with momentum, it tends to keep going for the rest of the session before reverting.
 
-This EA is built to **sit out the chop** and **participate in the expansions**.
+This EA is built to **sit out the chop**, **participate in the expansions**, **cut wrong trades before they get dragged into a deep loss**, and **lock in profit on the trades that work**.
 
-## The three signals
+## Everything is dynamic
+
+There are deliberately no hand-tuned, broker-specific point thresholds (except one absolute spread hard cap as a safety net). Each moving part adapts:
+
+| Knob | Adapts to |
+|------|-----------|
+| Lot size | Live equity — grows as the account grows, shrinks as it shrinks |
+| Risk %   | Drawdown from the equity peak — cut while losing, restored while recovering |
+| Volatility gate | ATR relative to its own long-run average |
+| Spread cap | A fraction of current ATR |
+| SL / TP / trailing | ATR — wider stops in volatile regimes, tighter in calm ones |
+
+## Entry — three aligned signals
 
 ### 1. Trend filter — H1 EMA(50)
-
-We only take longs when price on the last closed H1 bar is above EMA(50), and only shorts when it is below. This single line filters out roughly half of the entries — specifically the half that fades the prevailing bias.
+Longs only when the last closed H1 bar closed above EMA(50); shorts only when below. Filters out the half of signals that fade the prevailing bias.
 
 ### 2. Entry — M15 Donchian-20 breakout
+On each newly closed M15 bar, check whether its close cleared the highest high of the previous 20 bars (long) or the lowest low (short). The current bar is excluded from the window, so the close is compared to a fixed reference. With `InpRequireMomentum=true` the breakout bar must also close with a body in the trade direction, filtering exhaustion wicks.
 
-On each newly closed M15 bar we check whether its close is above the highest high of the previous 20 M15 bars (long) or below the lowest low (short). The current bar is excluded from the window so we are comparing the close to a fixed reference, not to itself.
-
-If `InpRequireMomentum=true` (default), the breakout bar must also close in the direction of the trade — i.e. a bullish body for a long, a bearish body for a short. This filters out exhaustion wicks.
-
-### 3. Volatility gate — ATR(M15, 14)
-
-We require ATR to be between `InpMinAtrPoints` and `InpMaxAtrPoints` (default 100-1500 points).
-
-- **Below the floor:** the market is too quiet, breakouts are unreliable and likely to revert.
-- **Above the ceiling:** the move has already happened, we are likely to enter on a news spike and get stopped.
-
-This is the single most important parameter to tune for your broker's quote precision.
-
-## Risk model
-
-### Position sizing
-Lots are derived from a fixed equity-risk %, not a fixed lot. The math:
+### 3. Adaptive volatility gate
+Instead of fixed point thresholds, the EA computes the average of ATR(M15,14) over the last `InpAtrAvgPeriod` bars (default 100) and only trades when current ATR sits inside the band:
 
 ```
-loss_per_lot = (|entry - SL| / tick_size) * tick_value
-lots         = equity * risk% / loss_per_lot
+InpAtrLoFactor * avgATR  <=  ATR  <=  InpAtrHiFactor * avgATR
 ```
 
-Then clamped to `[max(InpMinLot, broker_min), min(InpMaxLot, broker_max)]` and rounded down to the broker's `lot_step`.
+- **Below the floor (0.70×):** market too quiet, breakouts unreliable.
+- **Above the ceiling (3.00×):** the move likely already happened — entering here is buying a news spike.
 
-The defaults risk 0.5% per trade. **Do not raise this above 1% on gold** until you have at least a year of forward-tested results.
+Because the gate is relative, it works on any broker's quote precision without re-tuning.
+
+## Dynamic position sizing
+
+Lots are derived from an equity-risk %, never a fixed lot:
+
+```
+loss_per_lot   = (|entry - SL| / tick_size) * tick_value
+risk_money     = equity * effective_risk%
+lots           = risk_money / loss_per_lot
+```
+
+Then clamped to `[max(InpMinLot, broker_min), min(InpMaxLot, broker_max)]` and rounded down to `lot_step`.
+
+Because `equity` is the live account equity, **a larger balance produces a larger lot automatically** — the EA compounds.
+
+### Adaptive drawdown scaling
+`effective_risk%` is **not** constant. The EA tracks the all-time equity peak and reduces risk while the account is in drawdown:
+
+- Drawdown ≤ `InpDDStartPct` (4%): full `InpBaseRiskPct` (0.5%).
+- Drawdown ≥ `InpDDFullPct` (12%): risk floored at `InpBaseRiskPct * InpRiskFloorFrac` (0.5% × 0.35 ≈ 0.175%).
+- In between: linear interpolation.
+
+The effect compounds in your favour: in a drawdown, both equity is lower **and** the risk % is lower, so position size shrinks fast — and grows back automatically as the account recovers. This is the opposite of a martingale.
+
+## Stops and profit locking (เก็บกำไร)
 
 ### Stops
-- SL = entry ± 1.5 × ATR
-- TP = entry ± 2.5 × ATR
-- R:R ≈ 1 : 1.67
+- SL = entry ± `InpAtrSlMult` × ATR (default 1.5)
+- TP = entry ± `InpAtrTpMult` × ATR (default 3.0)
 
-Both are normalised to the symbol's digits and pushed outside the broker's `SYMBOL_TRADE_STOPS_LEVEL`.
+Both are normalised and pushed outside the broker's `SYMBOL_TRADE_STOPS_LEVEL`.
 
-### Trailing
-After the position is up by 0.6 × ATR, SL is moved to break-even (open price + 1 point). After 1.0 × ATR of profit, the SL trails at 1.2 × ATR behind current price.
+### Partial take-profit
+When a trade is up by `InpPartialAtr` × ATR (default 1.2), the EA closes `InpPartialPct`% (default 50%) of the original volume — banking realised profit — and immediately moves the remaining position's SL to break-even. After this, the trade can no longer become a net loser (barring slippage/gaps).
 
-### Daily-loss circuit breaker
-If unrealised + realised P&L for the day exceeds `InpDailyLossPct` (default 3%) of the day's starting equity, no new entries open until the next day. Existing positions continue to manage their stops. This is your protection against revenge-trading and clustered losers during news days.
+If the position is too small to split without leaving a sub-minimum remainder, the partial is skipped cleanly and the whole position rides the trailing stop instead.
 
-## Session and spread filters
+### Break-even and trailing
+- After `InpBreakEvenAtr` × ATR (0.7) of profit, SL moves to break-even.
+- After `InpTrailStartAtr` × ATR (1.0) of profit, SL trails `InpTrailAtrMult` × ATR (1.2) behind price.
 
-- **Trading window:** 13:00-22:00 server time. For brokers on GMT+2/GMT+3 this covers London open (10:00 GMT) through NY close (21:00 GMT). Adjust if your broker uses a different server clock.
-- **Friday cutoff:** 2 hours before `InpEndHour` no new entries on Fridays. This avoids holding through weekend gap risk.
-- **Spread cap:** entries are blocked when current spread > `InpMaxSpreadPts`. Keep this conservative (50 default).
+Stops only ever move in the favourable direction — they never loosen.
+
+## Self-correction — cutting wrong trades early (ไม่ปล่อยให้โดนลาก)
+
+The hard ATR stop loss is the last line of defence, not the first. Three faster checks run on every closed entry-TF bar and cut a trade the moment its premise breaks — so a wrong trade is closed at a fraction of the full SL loss instead of being "dragged":
+
+1. **Failed-breakout exit.** Each trade records the exact Donchian level it broke out from. If a later bar closes back through that level, the breakout has failed — close immediately.
+2. **Trend-flip exit.** If the H1 EMA trend flips against an open position, the trade's core premise (trend alignment) is gone — close immediately. The next valid breakout will be in the new, correct direction and is taken normally.
+3. **Time-in-loss exit.** A position still underwater after `InpMaxBarsInLoss` entry-TF bars (default 10 ≈ 2.5h) is a dead trade going nowhere — close it and free the slot.
+
+When any of these fires, the EA does not re-enter on the same bar; it waits for a fresh, valid signal on a later bar. That fresh signal — now aligned with the corrected trend — is how the EA "enters the correct order."
+
+## Safety nets
+
+- **Daily-loss circuit breaker.** If the day's loss exceeds `InpDailyLossPct` (4%) of the day's starting equity, no new entries open until the next day. Open positions are still managed. Protects against revenge-trading and clustered news-day losers.
+- **Dynamic spread filter.** Entries are blocked when spread exceeds `min(InpMaxSpreadAtrFrac × ATR, InpMaxSpreadHardPts)`.
+- **Session window** 13:00-22:00 server time (London + NY for GMT+2/+3 brokers) with a Friday cutoff 2h before close to avoid weekend gap risk.
+- **Max one position per symbol.** No grid, no averaging into losers.
+- **Position adoption.** On attach/restart the EA adopts any pre-existing positions on its magic number so it keeps managing them (trend-flip and time-in-loss still apply; partial/failed-breakout are disabled for adopted trades since their history is unknown).
 
 ## What this strategy is NOT
 
-- Not a scalper. It expects 0-3 trades per day on average.
-- Not a martingale or grid. There is at most one open position per symbol; losers are not averaged into.
-- Not news-aware. There is no calendar integration. The volatility gate is a crude proxy. If you want to avoid known news, use MT5's News tab or third-party calendars and disable AutoTrading manually around high-impact releases.
-- Not a substitute for understanding your broker. Different brokers price gold differently (some use XAUUSD, some XAUUSD.s, some GOLD.cash). Tick size, tick value, commission, and swap vary widely. Always re-tune on the exact symbol your broker offers.
+- Not a scalper. It expects roughly 0-3 trades per day.
+- Not a martingale or grid. At most one open position; losers are never averaged into; risk is *reduced*, not increased, after losses.
+- Not news-aware. There is no economic-calendar integration — the volatility gate is only a crude proxy. Disable AutoTrading manually around high-impact releases (FOMC, NFP, CPI).
+- Not a substitute for understanding your broker. Brokers price gold differently (`XAUUSD`, `XAUUSD.s`, `GOLD.cash`, …) with different tick size, tick value, commission, and swap. Always re-test on the exact symbol your broker offers.

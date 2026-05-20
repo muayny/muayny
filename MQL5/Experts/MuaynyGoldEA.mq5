@@ -1,44 +1,52 @@
 //+------------------------------------------------------------------+
 //|                                               MuaynyGoldEA.mq5   |
 //|                                                                  |
-//|  Donchian-breakout Expert Advisor tuned for XAUUSD (Gold)        |
-//|  on a high-volatility regime.                                    |
+//|  Adaptive Donchian-breakout Expert Advisor tuned for XAUUSD       |
+//|  (Gold) on a high-volatility regime.                              |
 //|                                                                  |
-//|  Why a breakout (not a pullback) on Gold:                        |
-//|    Gold tends to compress into ranges around news / session      |
-//|    boundaries and then expand violently. Counter-trend           |
-//|    pullback entries on RSI/Stoch get repeatedly stopped out      |
-//|    during these expansions, while a breakout aligned with the    |
-//|    higher-timeframe trend rides the move instead of fading it.   |
+//|  v2.00 — everything dynamic + self-correcting:                    |
 //|                                                                  |
-//|  Strategy summary:                                               |
-//|    Trend filter : H1 EMA(50). Price above = long-only bias,      |
-//|                   below = short-only bias.                       |
-//|    Entry        : M15 Donchian breakout of the prior N bars      |
-//|                   (default 20). Confirmation on bar close.       |
-//|    Volatility   : Require ATR(M15,14) >= InpMinAtrPoints to      |
-//|                   skip dead markets where breakouts fail.        |
-//|    Stops        : ATR-based. SL = entry +/- 1.5 * ATR,           |
-//|                   TP = entry +/- 2.5 * ATR.                      |
-//|    Sizing       : Risk a fixed % of equity on the SL distance.   |
-//|    Trailing     : After 1 * ATR profit, trail SL at 1.2 * ATR.   |
-//|    Safety nets  : Daily-loss circuit breaker, wide spread        |
-//|                   filter for gold, broker stop-level enforcement,|
-//|                   max-positions cap, magic-number isolation.     |
-//|                                                                  |
-//|  NOT INVESTMENT ADVICE. Past performance does not predict        |
-//|  future results. Backtest with realistic spreads, forward-test   |
-//|  on demo, and size positions you can afford to lose entirely.    |
+//|  DYNAMIC SIZING                                                   |
+//|    Lot size is derived from a % of live equity, so it scales      |
+//|    up automatically as the account grows and down as it shrinks.  |
+//|    The risk % itself is also adaptive: it is reduced while the    |
+//|    account is in drawdown from its equity peak and restored as    |
+//|    the account recovers.                                          |
+//|                                                                   |
+//|  ADAPTIVE VOLATILITY GATE                                         |
+//|    Entries require ATR(M15) to sit within a band defined          |
+//|    relative to its own long-run average — no broker-specific      |
+//|    point thresholds to hand-tune.                                 |
+//|                                                                   |
+//|  SELF-CORRECTION (cut wrong trades early — don't get "dragged")   |
+//|    - Failed-breakout exit : close if price closes back through    |
+//|                             the level it broke out from.          |
+//|    - Trend-flip exit      : close if the H1 trend flips against    |
+//|                             the open position.                    |
+//|    - Time-in-loss exit    : close a position still underwater     |
+//|                             after N entry-TF bars.                 |
+//|                                                                   |
+//|  PROFIT LOCKING (เก็บกำไร)                                        |
+//|    - Partial take-profit at a milestone, then SL to break-even.   |
+//|    - Break-even move + ATR trailing on the runner.                |
+//|                                                                   |
+//|  SAFETY NETS                                                      |
+//|    Daily-loss circuit breaker, dynamic spread filter, broker      |
+//|    stop-level enforcement, session/Friday filters, magic-number   |
+//|    isolation, max-positions cap.                                  |
+//|                                                                   |
+//|  NOT INVESTMENT ADVICE. Past performance does not predict         |
+//|  future results. Backtest with realistic spreads, forward-test    |
+//|  on demo, and size positions you can afford to lose entirely.     |
 //+------------------------------------------------------------------+
 #property copyright "Muayny"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 #property strict
-#property description "XAUUSD Donchian-breakout EA: H1 EMA trend filter, ATR stops, risk-based sizing, daily-loss circuit breaker."
+#property description "Adaptive XAUUSD Donchian-breakout EA: dynamic sizing, self-correcting exits, profit locking, daily-loss circuit breaker."
 
 #include <Trade/Trade.mqh>
 #include <Trade/PositionInfo.mqh>
-#include <Trade/SymbolInfo.mqh>
 
 //--- inputs --------------------------------------------------------
 input group "=== Trend Filter ==="
@@ -50,33 +58,49 @@ input ENUM_TIMEFRAMES InpEntryTF        = PERIOD_M15;   // Entry timeframe
 input int             InpDonchianLen    = 20;           // Donchian lookback (bars)
 input bool            InpRequireMomentum= true;         // Require breakout candle body in trade direction
 
-input group "=== Volatility Filter ==="
+input group "=== Adaptive Volatility Gate ==="
 input int             InpAtrPeriod      = 14;           // ATR period
-input double          InpMinAtrPoints   = 100;          // Minimum ATR (in symbol points) to allow entries
-input double          InpMaxAtrPoints   = 1500;         // Max ATR (skip news shocks)
+input int             InpAtrAvgPeriod   = 100;          // Long-run ATR average window (bars)
+input double          InpAtrLoFactor    = 0.70;         // Min ATR as fraction of its average
+input double          InpAtrHiFactor    = 3.00;         // Max ATR as fraction of its average
 
-input group "=== Risk Management ==="
-input double          InpRiskPercent    = 0.5;          // Risk per trade (% of equity) — keep small on gold
+input group "=== Dynamic Risk Sizing ==="
+input double          InpBaseRiskPct    = 0.50;         // Base risk per trade (% of equity)
 input double          InpAtrSlMult      = 1.5;          // SL = ATR * this
-input double          InpAtrTpMult      = 2.5;          // TP = ATR * this
-input double          InpMaxLot         = 2.0;          // Hard cap on lot size
+input double          InpAtrTpMult      = 3.0;          // Final TP = ATR * this
+input double          InpMaxLot         = 5.0;          // Hard cap on lot size
 input double          InpMinLot         = 0.01;         // Hard floor on lot size
 
-input group "=== Daily-Loss Circuit Breaker ==="
-input bool            InpUseDailyStop   = true;         // Halt trading after daily loss exceeds threshold
-input double          InpDailyLossPct   = 3.0;          // Halt new entries if daily loss exceeds % of start-of-day equity
+input group "=== Adaptive Drawdown Scaling ==="
+input bool            InpAdaptiveRisk   = true;         // Scale risk down while in equity drawdown
+input double          InpDDStartPct     = 4.0;          // Start cutting risk when DD from peak exceeds this %
+input double          InpDDFullPct      = 12.0;         // Risk reaches its floor at this DD %
+input double          InpRiskFloorFrac  = 0.35;         // Risk floor = BaseRisk * this fraction
 
-input group "=== Trailing Stop ==="
+input group "=== Daily-Loss Circuit Breaker ==="
+input bool            InpUseDailyStop   = true;         // Halt new entries after daily loss threshold
+input double          InpDailyLossPct   = 4.0;          // Halt if daily loss exceeds % of start-of-day equity
+
+input group "=== Profit Locking ==="
+input bool            InpUsePartialTP   = true;         // Take partial profit at a milestone
+input double          InpPartialAtr     = 1.2;          // Partial-TP trigger (ATR of favorable move)
+input double          InpPartialPct     = 50.0;         // Percent of initial volume to close at partial
+input bool            InpUseBreakEven   = true;         // Move SL to break-even
+input double          InpBreakEvenAtr   = 0.7;          // Move to BE after this many ATR of profit
 input bool            InpUseTrailing    = true;         // Enable ATR trailing stop
-input double          InpTrailStartAtr  = 1.0;          // Start trailing after price moves N x ATR in favor
+input double          InpTrailStartAtr  = 1.0;          // Start trailing after N x ATR profit
 input double          InpTrailAtrMult   = 1.2;          // Trailing distance in ATR
-input bool            InpBreakEvenFirst = true;         // Move SL to break-even before trailing kicks in
-input double          InpBreakEvenAtr   = 0.6;          // Move to BE after this many ATR of profit
+
+input group "=== Self-Correction (cut losers early) ==="
+input bool            InpFailBreakoutExit= true;        // Exit if price closes back through the breakout level
+input bool            InpTrendFlipExit  = true;         // Exit if H1 trend flips against the position
+input int             InpMaxBarsInLoss  = 10;           // Exit a still-losing position after N entry-TF bars (0=off)
 
 input group "=== Session & Spread Filter ==="
-input int             InpMaxSpreadPts   = 50;           // Max allowed spread in points (gold typical 20-40)
-input int             InpStartHour      = 13;           // Start hour (server time) — London open ~13 broker GMT+3
-input int             InpEndHour        = 22;           // End hour (server time) — NY close ~22 broker GMT+3
+input double          InpMaxSpreadAtrFrac= 0.25;        // Max spread as fraction of ATR
+input int             InpMaxSpreadHardPts= 80;          // Absolute max spread (points) — hard cap
+input int             InpStartHour      = 13;           // Trading window start hour (server time)
+input int             InpEndHour        = 22;           // Trading window end hour (server time)
 input bool            InpAvoidFriday    = true;         // Stop new entries 2h before EndHour on Friday
 input int             InpMaxPositions   = 1;            // Max simultaneous positions per symbol
 
@@ -84,13 +108,26 @@ input group "=== Identification ==="
 input long            InpMagic          = 20260520;     // Magic number
 input string          InpComment        = "MuaynyGold"; // Order comment
 
+//--- per-position state -------------------------------------------
+struct PosState
+  {
+   ulong    ticket;
+   double   initVolume;
+   bool     partialDone;
+   datetime entryBarTime;
+   double   triggerLevel;   // Donchian level the breakout cleared
+   int      dir;            // +1 long, -1 short
+  };
+PosState g_states[];
+
 //--- globals -------------------------------------------------------
-int      hTrendEMA     = INVALID_HANDLE;
-int      hAtr          = INVALID_HANDLE;
-datetime g_lastBarTime = 0;
-datetime g_dayStart    = 0;
+int      hTrendEMA      = INVALID_HANDLE;
+int      hAtr           = INVALID_HANDLE;
+datetime g_lastBarTime  = 0;
+datetime g_dayStart     = 0;
 double   g_dayStartEquity = 0.0;
-bool     g_dayHalted   = false;
+bool     g_dayHalted    = false;
+double   g_equityPeak   = 0.0;
 CTrade   g_trade;
 
 //+------------------------------------------------------------------+
@@ -108,27 +145,35 @@ int OnInit()
      }
 
    g_trade.SetExpertMagicNumber(InpMagic);
-   g_trade.SetDeviationInPoints(20); // gold slippage tolerance
+   g_trade.SetDeviationInPoints(20);
    g_trade.SetTypeFillingBySymbol(_Symbol);
    g_trade.LogLevel(LOG_LEVEL_ERRORS);
 
-   if(InpRiskPercent <= 0.0 || InpRiskPercent > 5.0)
+   if(InpBaseRiskPct <= 0.0 || InpBaseRiskPct > 5.0)
      {
-      Print("MuaynyGoldEA: InpRiskPercent must be in (0, 5]. Got ", InpRiskPercent);
+      Print("MuaynyGoldEA: InpBaseRiskPct must be in (0, 5].");
       return INIT_PARAMETERS_INCORRECT;
      }
-   if(InpAtrSlMult <= 0.0 || InpAtrTpMult <= 0.0)
+   if(InpAtrSlMult <= 0.0 || InpAtrTpMult <= 0.0 || InpDonchianLen < 5)
       return INIT_PARAMETERS_INCORRECT;
-   if(InpDonchianLen < 5)
+   if(InpAtrAvgPeriod < 20)
+      return INIT_PARAMETERS_INCORRECT;
+   if(InpRiskFloorFrac <= 0.0 || InpRiskFloorFrac > 1.0)
+      return INIT_PARAMETERS_INCORRECT;
+   if(InpDDFullPct <= InpDDStartPct)
+      return INIT_PARAMETERS_INCORRECT;
+   if(InpPartialPct <= 0.0 || InpPartialPct >= 100.0)
       return INIT_PARAMETERS_INCORRECT;
 
-   // Soft warning if symbol does not look like gold
    string sym = _Symbol;
    StringToUpper(sym);
    if(StringFind(sym, "XAU") < 0 && StringFind(sym, "GOLD") < 0)
       PrintFormat("MuaynyGoldEA: warning — symbol %s does not look like Gold. Defaults are tuned for XAUUSD.", _Symbol);
 
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_equityPeak = eq;
    ResetDailyBaseline();
+   AdoptExistingPositions();
    return INIT_SUCCEEDED;
   }
 
@@ -146,33 +191,50 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
-   RollDailyBaseline();
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity > g_equityPeak) g_equityPeak = equity;
 
-   if(InpUseTrailing || InpBreakEvenFirst)
-      ManagePositions();
+   RollDailyBaseline();
+   PruneStates();
+
+   double atrNow = 0.0, atrAvg = 0.0;
+   bool atrOk = GetAtrStats(atrNow, atrAvg);
+
+   if(atrOk)
+      ManagePositionsTick(atrNow);
 
    datetime barT = (datetime)iTime(_Symbol, InpEntryTF, 0);
    if(barT == 0 || barT == g_lastBarTime)
       return;
    g_lastBarTime = barT;
 
-   if(g_dayHalted)                        return;
-   if(!IsTradingTime())                   return;
-   if(!IsSpreadOk())                      return;
-   if(CountOwnPositions() >= InpMaxPositions) return;
+   if(!atrOk) return;
 
    int trend = GetTrendDirection();
-   if(trend == 0) return;
 
-   double atrVal = GetAtr();
-   if(atrVal <= 0.0) return;
-   double atrPts = atrVal / _Point;
-   if(atrPts < InpMinAtrPoints || atrPts > InpMaxAtrPoints) return;
+   // --- self-correction runs before any new entry ---
+   bool closedAny = ManagePositionsBar(trend);
+   if(closedAny)
+     {
+      PruneStates();
+      return; // re-enter the correct side on a later bar, not the same tick
+     }
 
-   int signal = GetBreakoutSignal(trend);
+   // --- entry gating ---
+   if(g_dayHalted)                            return;
+   if(trend == 0)                             return;
+   if(!IsTradingTime())                       return;
+   if(!IsSpreadOk(atrNow))                    return;
+   if(CountOwnPositions() >= InpMaxPositions)  return;
+
+   if(atrNow < InpAtrLoFactor * atrAvg)        return; // too quiet
+   if(atrNow > InpAtrHiFactor * atrAvg)        return; // shock / news spike
+
+   double triggerLevel = 0.0;
+   int signal = GetBreakoutSignal(trend, triggerLevel);
    if(signal == 0) return;
 
-   PlaceEntry(signal, atrVal);
+   PlaceEntry(signal, atrNow, triggerLevel);
   }
 
 //+------------------------------------------------------------------+
@@ -183,30 +245,29 @@ int GetTrendDirection()
    double ema[];
    ArraySetAsSeries(ema, true);
    if(CopyBuffer(hTrendEMA, 0, 0, 2, ema) <= 0) return 0;
-   double price = iClose(_Symbol, InpTrendTF, 1); // last closed H1 bar
+   double price = iClose(_Symbol, InpTrendTF, 1);
    if(price > ema[1]) return 1;
    if(price < ema[1]) return -1;
    return 0;
   }
 
 //+------------------------------------------------------------------+
-//| Donchian-breakout signal on the just-closed M15 bar              |
+//| Donchian-breakout signal; outputs the level that was cleared      |
 //+------------------------------------------------------------------+
-int GetBreakoutSignal(int trendDir)
+int GetBreakoutSignal(int trendDir, double &triggerLevel)
   {
-   int    need  = InpDonchianLen + 2;
+   int    need = InpDonchianLen + 2;
    double high[], low[], open[], close[];
    ArraySetAsSeries(high,  true);
    ArraySetAsSeries(low,   true);
    ArraySetAsSeries(open,  true);
    ArraySetAsSeries(close, true);
 
-   if(CopyHigh (_Symbol, InpEntryTF, 0, need, high)  <= 0) return 0;
-   if(CopyLow  (_Symbol, InpEntryTF, 0, need, low)   <= 0) return 0;
-   if(CopyOpen (_Symbol, InpEntryTF, 0, need, open)  <= 0) return 0;
-   if(CopyClose(_Symbol, InpEntryTF, 0, need, close) <= 0) return 0;
+   if(CopyHigh (_Symbol, InpEntryTF, 0, need, high)  < need) return 0;
+   if(CopyLow  (_Symbol, InpEntryTF, 0, need, low)   < need) return 0;
+   if(CopyOpen (_Symbol, InpEntryTF, 0, need, open)  < need) return 0;
+   if(CopyClose(_Symbol, InpEntryTF, 0, need, close) < need) return 0;
 
-   // Donchian window: bars [2 .. InpDonchianLen+1], excluding the just-closed bar (index 1)
    double hi = -DBL_MAX, lo = DBL_MAX;
    for(int i = 2; i <= InpDonchianLen + 1; i++)
      {
@@ -222,31 +283,58 @@ int GetBreakoutSignal(int trendDir)
    if(trendDir > 0 && c > hi)
      {
       if(InpRequireMomentum && !bullBody) return 0;
+      triggerLevel = hi;
       return 1;
      }
    if(trendDir < 0 && c < lo)
      {
       if(InpRequireMomentum && !bearBody) return 0;
+      triggerLevel = lo;
       return -1;
      }
    return 0;
   }
 
 //+------------------------------------------------------------------+
-//| ATR value on the last closed entry-TF bar                        |
+//| Current ATR and its long-run average                             |
 //+------------------------------------------------------------------+
-double GetAtr()
+bool GetAtrStats(double &atrNow, double &atrAvg)
   {
+   int n = InpAtrAvgPeriod + 2;
    double atr[];
    ArraySetAsSeries(atr, true);
-   if(CopyBuffer(hAtr, 0, 0, 2, atr) <= 0) return 0.0;
-   return atr[1];
+   if(CopyBuffer(hAtr, 0, 0, n, atr) < n) return false;
+
+   atrNow = atr[1];
+   double sum = 0.0;
+   for(int i = 1; i <= InpAtrAvgPeriod; i++)
+      sum += atr[i];
+   atrAvg = sum / InpAtrAvgPeriod;
+   return (atrNow > 0.0 && atrAvg > 0.0);
   }
 
 //+------------------------------------------------------------------+
-//| Place an entry in the given direction                            |
+//| Adaptive risk percent based on drawdown from equity peak          |
 //+------------------------------------------------------------------+
-void PlaceEntry(int dir, double atrVal)
+double CurrentRiskPct()
+  {
+   if(!InpAdaptiveRisk || g_equityPeak <= 0.0)
+      return InpBaseRiskPct;
+
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dd = (g_equityPeak - equity) / g_equityPeak * 100.0;
+   if(dd <= InpDDStartPct) return InpBaseRiskPct;
+   if(dd >= InpDDFullPct)  return InpBaseRiskPct * InpRiskFloorFrac;
+
+   double t    = (dd - InpDDStartPct) / (InpDDFullPct - InpDDStartPct);
+   double mult = 1.0 - t * (1.0 - InpRiskFloorFrac);
+   return InpBaseRiskPct * mult;
+  }
+
+//+------------------------------------------------------------------+
+//| Place an entry and register its state                            |
+//+------------------------------------------------------------------+
+void PlaceEntry(int dir, double atrVal, double triggerLevel)
   {
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -256,7 +344,6 @@ void PlaceEntry(int dir, double atrVal)
 
    sl = NormalizeDouble(sl, _Digits);
    tp = NormalizeDouble(tp, _Digits);
-
    EnforceStopDistance(dir, entry, sl, tp);
 
    double lots = CalcLotByRisk(entry, sl);
@@ -271,85 +358,207 @@ void PlaceEntry(int dir, double atrVal)
              : g_trade.Sell(lots, _Symbol, entry, sl, tp, InpComment);
 
    if(!ok)
+     {
       PrintFormat("MuaynyGoldEA: order send failed. retcode=%d, %s",
                   g_trade.ResultRetcode(), g_trade.ResultRetcodeDescription());
+      return;
+     }
+
+   RegisterNewPosition(triggerLevel, dir);
+   PrintFormat("MuaynyGoldEA: %s %.2f lots @ %.*f, SL %.*f, TP %.*f, risk %.2f%%",
+               (dir > 0 ? "BUY" : "SELL"), lots, _Digits, entry,
+               _Digits, sl, _Digits, tp, CurrentRiskPct());
   }
 
 //+------------------------------------------------------------------+
-//| Manage open positions: break-even, ATR trailing                  |
+//| Per-tick management: partial TP, break-even, trailing             |
 //+------------------------------------------------------------------+
-void ManagePositions()
+void ManagePositionsTick(double atrVal)
   {
-   double atrVal = GetAtr();
    if(atrVal <= 0.0) return;
 
    CPositionInfo pos;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       if(!pos.SelectByIndex(i)) continue;
-      if(pos.Symbol() != _Symbol) continue;
-      if(pos.Magic()  != InpMagic) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
 
-      double openPrice = pos.PriceOpen();
-      double curPrice  = pos.PriceCurrent();
-      double curSL     = pos.StopLoss();
-      double curTP     = pos.TakeProfit();
+      ulong  ticket   = pos.Ticket();
+      int    si       = FindState(ticket);
+      double openPrice= pos.PriceOpen();
+      double curPrice = pos.PriceCurrent();
+      double curSL    = pos.StopLoss();
+      double curTP    = pos.TakeProfit();
       ENUM_POSITION_TYPE type = pos.PositionType();
+      int    dir      = (type == POSITION_TYPE_BUY) ? 1 : -1;
 
-      if(type == POSITION_TYPE_BUY)
+      double profit   = (dir > 0) ? (curPrice - openPrice) : (openPrice - curPrice);
+      if(profit <= 0.0) continue;
+      double profitAtr= profit / atrVal;
+
+      // --- 1) partial take-profit, then lock SL to break-even ---
+      if(InpUsePartialTP && si >= 0 && !g_states[si].partialDone
+         && profitAtr >= InpPartialAtr)
         {
-         double profitDist = curPrice - openPrice;
+         DoPartialClose(si, pos.Volume());
+        }
 
-         if(InpBreakEvenFirst && profitDist >= atrVal * InpBreakEvenAtr
-            && (curSL < openPrice - _Point || curSL == 0.0))
+      // --- 2) break-even ---
+      if(InpUseBreakEven && profitAtr >= InpBreakEvenAtr)
+        {
+         double beSL = NormalizeDouble(openPrice + dir * _Point, _Digits);
+         if(IsStopImprovement(dir, curSL, beSL))
            {
-            double beSL = NormalizeDouble(openPrice + _Point, _Digits);
-            if(beSL > curSL + _Point)
-              {
-               g_trade.PositionModify(pos.Ticket(), beSL, curTP);
-               curSL = beSL;
-              }
-           }
-
-         if(InpUseTrailing && profitDist >= atrVal * InpTrailStartAtr)
-           {
-            double newSL = NormalizeDouble(curPrice - atrVal * InpTrailAtrMult, _Digits);
-            if(newSL > curSL + _Point)
-               g_trade.PositionModify(pos.Ticket(), newSL, curTP);
+            g_trade.PositionModify(ticket, beSL, curTP);
+            curSL = beSL;
            }
         }
-      else if(type == POSITION_TYPE_SELL)
+
+      // --- 3) ATR trailing ---
+      if(InpUseTrailing && profitAtr >= InpTrailStartAtr)
         {
-         double profitDist = openPrice - curPrice;
-
-         if(InpBreakEvenFirst && profitDist >= atrVal * InpBreakEvenAtr
-            && (curSL > openPrice + _Point || curSL == 0.0))
-           {
-            double beSL = NormalizeDouble(openPrice - _Point, _Digits);
-            if(curSL == 0.0 || beSL < curSL - _Point)
-              {
-               g_trade.PositionModify(pos.Ticket(), beSL, curTP);
-               curSL = beSL;
-              }
-           }
-
-         if(InpUseTrailing && profitDist >= atrVal * InpTrailStartAtr)
-           {
-            double newSL = NormalizeDouble(curPrice + atrVal * InpTrailAtrMult, _Digits);
-            if(curSL == 0.0 || newSL < curSL - _Point)
-               g_trade.PositionModify(pos.Ticket(), newSL, curTP);
-           }
+         double newSL = NormalizeDouble(curPrice - dir * atrVal * InpTrailAtrMult, _Digits);
+         if(IsStopImprovement(dir, curSL, newSL))
+            g_trade.PositionModify(ticket, newSL, curTP);
         }
      }
   }
 
 //+------------------------------------------------------------------+
-//| Risk-based lot sizing                                            |
+//| Per-bar management: self-correcting exits. Returns true if any    |
+//| position was closed.                                              |
+//+------------------------------------------------------------------+
+bool ManagePositionsBar(int trend)
+  {
+   double closeArr[];
+   ArraySetAsSeries(closeArr, true);
+   if(CopyClose(_Symbol, InpEntryTF, 0, 3, closeArr) < 3) return false;
+   double lastClose = closeArr[1];
+
+   bool closedAny = false;
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+
+      ulong ticket = pos.Ticket();
+      int   si     = FindState(ticket);
+      int   dir    = (pos.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
+
+      // --- failed-breakout: price closed back through the trigger ---
+      if(InpFailBreakoutExit && si >= 0 && g_states[si].triggerLevel > 0.0)
+        {
+         double trg = g_states[si].triggerLevel;
+         if((dir > 0 && lastClose < trg) || (dir < 0 && lastClose > trg))
+           {
+            if(CloseOwnPosition(ticket, "failed-breakout"))
+               closedAny = true;
+            continue;
+           }
+        }
+
+      // --- trend-flip: H1 trend now opposes the position ---
+      if(InpTrendFlipExit && trend != 0 && trend != dir)
+        {
+         if(CloseOwnPosition(ticket, "trend-flip"))
+            closedAny = true;
+         continue;
+        }
+
+      // --- time-in-loss: still underwater after N bars ---
+      if(InpMaxBarsInLoss > 0 && si >= 0)
+        {
+         int bars = iBarShift(_Symbol, InpEntryTF, g_states[si].entryBarTime, false);
+         if(bars >= InpMaxBarsInLoss)
+           {
+            double pl = pos.Profit() + pos.Swap();
+            if(pl < 0.0)
+              {
+               if(CloseOwnPosition(ticket, "time-in-loss"))
+                  closedAny = true;
+               continue;
+              }
+           }
+        }
+     }
+   return closedAny;
+  }
+
+//+------------------------------------------------------------------+
+//| Close a fraction of a position, then move SL to break-even        |
+//+------------------------------------------------------------------+
+void DoPartialClose(int si, double currentVolume)
+  {
+   ulong  ticket   = g_states[si].ticket;
+   double lotStep  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+
+   double closeVol = g_states[si].initVolume * (InpPartialPct / 100.0);
+   if(lotStep > 0.0)
+      closeVol = MathFloor(closeVol / lotStep) * lotStep;
+   closeVol = NormalizeDouble(closeVol, 2);
+
+   // Can't split without leaving a sub-minimum remainder — skip cleanly.
+   if(closeVol < minLot || (currentVolume - closeVol) < minLot)
+     {
+      g_states[si].partialDone = true;
+      return;
+     }
+
+   if(g_trade.PositionClosePartial(ticket, closeVol))
+     {
+      g_states[si].partialDone = true;
+      PrintFormat("MuaynyGoldEA: partial close #%I64u %.2f lots locked.", ticket, closeVol);
+
+      if(PositionSelectByTicket(ticket))
+        {
+         int    dir       = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double curSL     = PositionGetDouble(POSITION_SL);
+         double curTP     = PositionGetDouble(POSITION_TP);
+         double beSL      = NormalizeDouble(openPrice + dir * _Point, _Digits);
+         if(IsStopImprovement(dir, curSL, beSL))
+            g_trade.PositionModify(ticket, beSL, curTP);
+        }
+     }
+   else
+      PrintFormat("MuaynyGoldEA: partial close #%I64u failed retcode=%d.",
+                  ticket, g_trade.ResultRetcode());
+  }
+
+//+------------------------------------------------------------------+
+//| True if newSL is a strict improvement over curSL for direction    |
+//+------------------------------------------------------------------+
+bool IsStopImprovement(int dir, double curSL, double newSL)
+  {
+   if(dir > 0)
+      return (newSL > curSL + _Point);
+   return (curSL == 0.0 || newSL < curSL - _Point);
+  }
+
+//+------------------------------------------------------------------+
+//| Close a position fully by ticket                                 |
+//+------------------------------------------------------------------+
+bool CloseOwnPosition(ulong ticket, string reason)
+  {
+   if(g_trade.PositionClose(ticket))
+     {
+      PrintFormat("MuaynyGoldEA: closed #%I64u (%s).", ticket, reason);
+      return true;
+     }
+   PrintFormat("MuaynyGoldEA: close #%I64u failed (%s) retcode=%d.",
+               ticket, reason, g_trade.ResultRetcode());
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//| Risk-based lot sizing using the adaptive risk percent             |
 //+------------------------------------------------------------------+
 double CalcLotByRisk(double entry, double sl)
   {
    double equity    = AccountInfoDouble(ACCOUNT_EQUITY);
-   double riskMoney = equity * (InpRiskPercent / 100.0);
+   double riskMoney = equity * (CurrentRiskPct() / 100.0);
    double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    if(tickSize <= 0.0 || tickValue <= 0.0) return 0.0;
@@ -378,8 +587,8 @@ double CalcLotByRisk(double entry, double sl)
 //+------------------------------------------------------------------+
 void EnforceStopDistance(int dir, double entry, double &sl, double &tp)
   {
-   long stopLevelPts = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist    = stopLevelPts * _Point;
+   long   stopLevelPts = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist      = stopLevelPts * _Point;
    if(minDist <= 0.0) return;
 
    if(dir > 0)
@@ -391,6 +600,71 @@ void EnforceStopDistance(int dir, double entry, double &sl, double &tp)
      {
       if(sl - entry < minDist) sl = NormalizeDouble(entry + minDist, _Digits);
       if(entry - tp < minDist) tp = NormalizeDouble(entry - minDist, _Digits);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Position-state registry                                          |
+//+------------------------------------------------------------------+
+int FindState(ulong ticket)
+  {
+   for(int i = 0; i < ArraySize(g_states); i++)
+      if(g_states[i].ticket == ticket)
+         return i;
+   return -1;
+  }
+
+void RegisterNewPosition(double triggerLevel, int dir)
+  {
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+      if(FindState(pos.Ticket()) >= 0) continue;
+
+      int n = ArraySize(g_states);
+      ArrayResize(g_states, n + 1);
+      g_states[n].ticket       = pos.Ticket();
+      g_states[n].initVolume   = pos.Volume();
+      g_states[n].partialDone  = false;
+      g_states[n].entryBarTime = g_lastBarTime;
+      g_states[n].triggerLevel = triggerLevel;
+      g_states[n].dir          = dir;
+     }
+  }
+
+void PruneStates()
+  {
+   for(int i = ArraySize(g_states) - 1; i >= 0; i--)
+     {
+      if(PositionSelectByTicket(g_states[i].ticket)) continue;
+      for(int j = i; j < ArraySize(g_states) - 1; j++)
+         g_states[j] = g_states[j + 1];
+      ArrayResize(g_states, ArraySize(g_states) - 1);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Adopt positions already open at attach/restart time              |
+//+------------------------------------------------------------------+
+void AdoptExistingPositions()
+  {
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+      if(FindState(pos.Ticket()) >= 0) continue;
+
+      int n = ArraySize(g_states);
+      ArrayResize(g_states, n + 1);
+      g_states[n].ticket       = pos.Ticket();
+      g_states[n].initVolume   = pos.Volume();
+      g_states[n].partialDone  = true;  // unknown history — don't re-trigger partial
+      g_states[n].entryBarTime = (datetime)pos.Time();
+      g_states[n].triggerLevel = 0.0;   // unknown — failed-breakout exit disabled for it
+      g_states[n].dir          = (pos.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
      }
   }
 
@@ -410,12 +684,15 @@ int CountOwnPositions()
   }
 
 //+------------------------------------------------------------------+
-//| Spread filter                                                    |
+//| Dynamic spread filter                                            |
 //+------------------------------------------------------------------+
-bool IsSpreadOk()
+bool IsSpreadOk(double atrVal)
   {
-   long spreadPts = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
-   return spreadPts <= InpMaxSpreadPts;
+   long   spreadPts = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   if(spreadPts > InpMaxSpreadHardPts) return false;
+   double atrPts    = atrVal / _Point;
+   double dynCap    = atrPts * InpMaxSpreadAtrFrac;
+   return (spreadPts <= dynCap);
   }
 
 //+------------------------------------------------------------------+
@@ -425,23 +702,23 @@ bool IsTradingTime()
   {
    MqlDateTime dt;
    TimeCurrent(dt);
-   if(dt.day_of_week == 0 || dt.day_of_week == 6) return false; // weekend safety
+   if(dt.day_of_week == 0 || dt.day_of_week == 6) return false;
    if(dt.hour < InpStartHour || dt.hour >= InpEndHour) return false;
    if(InpAvoidFriday && dt.day_of_week == 5 && dt.hour >= InpEndHour - 2) return false;
    return true;
   }
 
 //+------------------------------------------------------------------+
-//| Day-boundary baseline for daily-loss circuit breaker             |
+//| Daily-loss circuit breaker                                        |
 //+------------------------------------------------------------------+
 void ResetDailyBaseline()
   {
    MqlDateTime dt;
    TimeCurrent(dt);
    dt.hour = 0; dt.min = 0; dt.sec = 0;
-   g_dayStart        = StructToTime(dt);
-   g_dayStartEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_dayHalted       = false;
+   g_dayStart       = StructToTime(dt);
+   g_dayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_dayHalted      = false;
   }
 
 void RollDailyBaseline()
@@ -454,7 +731,7 @@ void RollDailyBaseline()
       ResetDailyBaseline();
 
    if(!InpUseDailyStop || g_dayStartEquity <= 0.0) return;
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    double lossPct = (g_dayStartEquity - equity) / g_dayStartEquity * 100.0;
    if(lossPct >= InpDailyLossPct && !g_dayHalted)
      {

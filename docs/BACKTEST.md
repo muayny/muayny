@@ -34,7 +34,7 @@ If your broker charges commission per lot (common on ECN-style accounts):
 
 In order of importance:
 
-1. **Max drawdown (absolute and % of initial deposit).** If max DD > 30% on the backtest, expect 1.5-2x that live. Reduce `InpRiskPercent`.
+1. **Max drawdown (absolute and % of initial deposit).** If max DD > 30% on the backtest, expect 1.5-2x that live. Reduce `InpBaseRiskPct`, and consider lowering `InpDDStartPct` so the adaptive scaler cuts size sooner.
 2. **Number of trades.** < 50 over 3 years = statistically meaningless. > 5000 = probably noise.
 3. **Profit factor.** Above 1.3 with 200+ trades is decent. Above 2.0 without overfit is suspicious — check the inputs you tuned.
 4. **Recovery factor** and **Sharpe**. Both included in the report.
@@ -51,10 +51,12 @@ The Tester can optimise inputs. **This is the single fastest way to fool yoursel
 Reasonable parameters to optimise:
 - `InpDonchianLen` over [10, 15, 20, 25, 30]
 - `InpAtrSlMult` over [1.0, 1.5, 2.0, 2.5]
-- `InpAtrTpMult` over [2.0, 2.5, 3.0, 3.5]
-- `InpMinAtrPoints` over [50, 100, 150, 200]
+- `InpAtrTpMult` over [2.5, 3.0, 3.5, 4.0]
+- `InpAtrLoFactor` over [0.5, 0.7, 0.9, 1.1]
+- `InpPartialAtr` over [1.0, 1.2, 1.5, 1.8]
+- `InpMaxBarsInLoss` over [6, 8, 10, 14, 0] (0 = disabled)
 
-Avoid optimising `InpRiskPercent` or `InpDailyLossPct` — those are risk-management inputs, not edge inputs.
+Avoid optimising the risk-management inputs — `InpBaseRiskPct`, `InpDDStartPct`, `InpDDFullPct`, `InpRiskFloorFrac`, `InpDailyLossPct`. Those exist to cap losses, not to chase an edge; optimising them just curve-fits the EA into taking more risk on the in-sample period.
 
 ## Walk-forward (more rigorous)
 

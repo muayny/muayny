@@ -23,7 +23,7 @@ If you decide to run this live, please:
 
 1. **Start with the smallest account size you can.** Many brokers allow $100-200 accounts with cent or micro lot sizing. Lose this if you must — and you very well might.
 2. **Risk no more than 0.5% per trade** for the first three months.
-3. **Cap daily loss at 3%** (the EA's default) and **monthly loss at 10%** (manual — disable the EA if hit).
+3. **Cap daily loss at 4%** (the EA's default `InpDailyLossPct`) and **monthly loss at 10%** (manual — disable the EA if hit).
 4. **Withdraw profits** every month above a chosen threshold so a string of losses doesn't claw back a year of gains. Equity compounding is what kills retail algo traders; profit compounding is what builds wealth.
 5. **Keep a journal.** Daily P&L, trades count, any anomalies. Patterns reveal themselves only when written down.
 

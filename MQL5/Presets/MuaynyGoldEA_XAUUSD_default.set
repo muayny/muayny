@@ -1,13 +1,18 @@
-; MuaynyGoldEA default preset for XAUUSD (high-volatility regime)
+; MuaynyGoldEA v2 default preset for XAUUSD (high-volatility regime)
 ; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then in Strategy Tester
 ; or on an attached chart click "Load" and pick this file.
 ;
 ; Defaults assume:
 ;   - Broker server time = GMT+2 or GMT+3 (typical retail). Adjust StartHour/EndHour
 ;     if your broker uses a different server clock.
-;   - 5-digit XAUUSD pricing (1 point = 0.01 USD).
+;   - XAUUSD priced with _Point = 0.01.
 ;
-; NOT investment advice. Tune to your broker's spread and your own risk tolerance.
+; Everything is dynamic: lot size scales with equity, risk scales down in
+; drawdown, the volatility gate is relative to ATR's own average, and the
+; spread cap is a fraction of ATR. There are no broker-specific point
+; thresholds to hand-tune except the absolute spread hard cap.
+;
+; NOT investment advice. Tune to your broker and your own risk tolerance.
 
 InpTrendTF=16385
 InpTrendEMA=50
@@ -17,25 +22,39 @@ InpDonchianLen=20
 InpRequireMomentum=true
 
 InpAtrPeriod=14
-InpMinAtrPoints=100
-InpMaxAtrPoints=1500
+InpAtrAvgPeriod=100
+InpAtrLoFactor=0.7
+InpAtrHiFactor=3.0
 
-InpRiskPercent=0.5
+InpBaseRiskPct=0.5
 InpAtrSlMult=1.5
-InpAtrTpMult=2.5
-InpMaxLot=2.0
+InpAtrTpMult=3.0
+InpMaxLot=5.0
 InpMinLot=0.01
 
-InpUseDailyStop=true
-InpDailyLossPct=3.0
+InpAdaptiveRisk=true
+InpDDStartPct=4.0
+InpDDFullPct=12.0
+InpRiskFloorFrac=0.35
 
+InpUseDailyStop=true
+InpDailyLossPct=4.0
+
+InpUsePartialTP=true
+InpPartialAtr=1.2
+InpPartialPct=50.0
+InpUseBreakEven=true
+InpBreakEvenAtr=0.7
 InpUseTrailing=true
 InpTrailStartAtr=1.0
 InpTrailAtrMult=1.2
-InpBreakEvenFirst=true
-InpBreakEvenAtr=0.6
 
-InpMaxSpreadPts=50
+InpFailBreakoutExit=true
+InpTrendFlipExit=true
+InpMaxBarsInLoss=10
+
+InpMaxSpreadAtrFrac=0.25
+InpMaxSpreadHardPts=80
 InpStartHour=13
 InpEndHour=22
 InpAvoidFriday=true
