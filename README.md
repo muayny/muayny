@@ -15,8 +15,9 @@ Strategy: **adaptive Donchian breakout aligned with a higher-timeframe trend fil
 ```
 MQL5/
   Experts/MuaynyGoldEA.mq5            # the EA source
-  Presets/MuaynyGoldEA_XAUUSD_default.set    # conservative,  risk ~3-4/10
-  Presets/MuaynyGoldEA_XAUUSD_moderate.set   # moderate,      risk ~5-6/10
+  Presets/MuaynyGoldEA_XAUUSD_default.set      # conservative, risk ~3-4/10
+  Presets/MuaynyGoldEA_XAUUSD_moderate.set     # moderate,     risk ~5-6/10
+  Presets/MuaynyGoldEA_XAUUSD_aggressive.set   # aggressive,   risk ~8/10
 docs/
   STRATEGY.md                         # what the EA does and why
   RISK_LEVELS.md                      # pick a risk level (0-10 scale)
@@ -25,9 +26,9 @@ docs/
   RISK_WARNING.md                     # please read
 ```
 
-Two presets ship: the **default** (conservative, ~3-4/10) and the
-**moderate** (~5-6/10, risks 1% per trade). See `docs/RISK_LEVELS.md` to
-choose, or to build a conservative (1-2/10) or aggressive (7-8/10) profile.
+Three presets ship — **default** (~3-4/10), **moderate** (~5-6/10) and
+**aggressive** (~8/10). See `docs/RISK_LEVELS.md` to choose, and for the
+news-gap math that explains why the position-slot cap stays at 5.
 
 ---
 
@@ -37,19 +38,21 @@ choose, or to build a conservative (1-2/10) or aggressive (7-8/10) profile.
 |-------------------|------------------------------------------------------------------|
 | Trend filter      | H1 EMA(50): trade only with the trend                            |
 | Entry             | M15 Donchian-20 breakout, close beyond level + momentum body     |
-| Entry confirm     | Stochastic(M30) filter — no entries into an exhausted move        |
+| Entry confirm     | Stochastic(M30) — no entries into an exhausted move               |
+| Entry timing      | ADX(M15) ≥ 22 — skip weak / false breakouts in chop              |
 | Volatility gate   | ATR(M15,14) within 0.7×-3.0× of its 100-bar average (adaptive)   |
 | Stop loss         | 1.5 × ATR(M15)                                                   |
 | Take profit       | 3.0 × ATR(M15), with a partial close along the way               |
 | Profit locking    | Close 50% at +1.2 ATR, move SL to break-even, trail the runner   |
 | Position sizing   | % of **live equity** — lot scales up as the account grows        |
+| Position slots    | Max simultaneous positions scale with balance (pyramid, not grid)|
 | Adaptive risk     | Risk % cut automatically while in drawdown, restored on recovery |
 | Self-correction   | Failed-breakout / trend-flip / time-in-loss early exits          |
-| Daily-loss stop   | Halt new entries after -4% equity on the day                     |
-| Session           | 13:00-22:00 server time (London + NY)                            |
+| Daily-loss stop   | Halt new entries after the daily loss limit                      |
+| Session           | Entered in **Thai time** (e.g. 07:00-03:00), converted to server |
 | Weekend exit      | Flatten positions ~15 min before the Friday/holiday close        |
 | Spread filter     | Dynamic: min(0.25 × ATR, 80 points)                              |
-| Monitoring        | On-chart dashboard (status, trend, ATR, risk, P&L, position)     |
+| Monitoring        | On-chart dashboard (status, trend, session, ATR, risk, P&L)      |
 
 See `docs/STRATEGY.md` for the reasoning behind each piece.
 
@@ -64,6 +67,7 @@ See `docs/STRATEGY.md` for the reasoning behind each piece.
 - **Risk shrinks when losing.** While the account is in drawdown from its equity peak, the risk % is scaled down toward a floor, then restored as it recovers — the opposite of a martingale.
 - **The bot cuts its own mistakes.** A trade is closed early — well before the hard stop loss — the moment its premise breaks: the breakout fails back through its trigger level, the H1 trend flips against it, or it sits underwater too long. Wrong trades are not left to be "dragged".
 - **Winners are banked.** Half the position is closed at a profit milestone and the rest is protected at break-even, so a trade that worked cannot turn back into a loss.
+- **Slots scale with balance — safely.** The max number of simultaneous positions grows as the account grows, but extra positions are *risk-free pyramid adds*: a new one opens only when every existing position is already at break-even. Total stop-based risk stays at roughly one trade's worth. This is the opposite of a grid. See `docs/RISK_LEVELS.md` for the news-gap caveat.
 
 ---
 

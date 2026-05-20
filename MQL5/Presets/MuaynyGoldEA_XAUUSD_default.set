@@ -1,20 +1,17 @@
-; MuaynyGoldEA v3 default preset for XAUUSD (high-volatility regime)
-; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then in Strategy Tester
-; or on an attached chart click "Load" and pick this file.
+; MuaynyGoldEA v3.1 — DEFAULT (conservative) preset for XAUUSD  (risk ~3-4/10)
+; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then click "Load".
 ;
-; Defaults assume:
-;   - Broker server time = GMT+2 or GMT+3 (typical retail). Adjust StartHour/EndHour
-;     if your broker uses a different server clock.
-;   - XAUUSD priced with _Point = 0.01.
+; Session is entered in THAI time (ICT, UTC+7): 07:00 -> 03:00 next day.
+; The EA converts it to broker server time using InpBrokerGMTOffset.
+;   InpBrokerGMTOffset = 3  -> typical retail broker in summer (GMT+3)
+;   InpBrokerGMTOffset = 2  -> winter (GMT+2)
+; The EA prints the resolved server window + a detected-offset check to the
+; Experts log at attach. If trades fire at the wrong time, fix the offset.
 ;
-; Everything is dynamic: lot size scales with equity, risk scales down in
-; drawdown, the volatility gate is relative to ATR's own average, and the
-; spread cap is a fraction of ATR. A Stochastic(M30) filter blocks entries
-; into exhausted moves; positions are flattened before the weekend gap.
+; One position at a time at this balance; dynamic slots only unlock more
+; as the account grows. No martingale, no grid, no averaging down.
 ;
-; Single position at a time. No martingale, no grid, no averaging down.
-;
-; NOT investment advice. Tune to your broker and your own risk tolerance.
+; NOT investment advice. Backtest and forward-test before going live.
 
 InpTrendTF=16385
 InpTrendEMA=50
@@ -30,6 +27,10 @@ InpStochD=3
 InpStochSlowing=3
 InpStochOB=80
 InpStochOS=20
+
+InpUseAdxFilter=true
+InpAdxPeriod=14
+InpMinAdx=22.0
 
 InpAtrPeriod=14
 InpAtrAvgPeriod=100
@@ -65,9 +66,17 @@ InpMaxBarsInLoss=10
 
 InpMaxSpreadAtrFrac=0.25
 InpMaxSpreadHardPts=80
-InpStartHour=13
-InpEndHour=22
+
+InpHoursInThaiTime=true
+InpBrokerGMTOffset=3
+InpStartHour=7
+InpEndHour=3
 InpAvoidFriday=true
+
+InpDynamicSlots=true
+InpBalancePerSlot=5000.0
+InpMaxSlotsCap=2
+InpPyramidRiskFree=true
 InpMaxPositions=1
 
 InpUseWeekendExit=true

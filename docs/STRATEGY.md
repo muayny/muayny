@@ -18,11 +18,12 @@ There are deliberately no hand-tuned, broker-specific point thresholds (except o
 |------|-----------|
 | Lot size | Live equity — grows as the account grows, shrinks as it shrinks |
 | Risk %   | Drawdown from the equity peak — cut while losing, restored while recovering |
+| Position slots | Account balance — more simultaneous positions allowed as it grows |
 | Volatility gate | ATR relative to its own long-run average |
 | Spread cap | A fraction of current ATR |
 | SL / TP / trailing | ATR — wider stops in volatile regimes, tighter in calm ones |
 
-## Entry — four aligned checks
+## Entry — five aligned checks
 
 ### 1. Trend filter — H1 EMA(50)
 Longs only when the last closed H1 bar closed above EMA(50); shorts only when below. Filters out the half of signals that fade the prevailing bias.
@@ -49,6 +50,29 @@ A breakout that fires when the market is already stretched tends to be the last 
 - A **short** breakout is rejected symmetrically at `InpStochOS` (20).
 
 The filter only ever blocks entries; it never creates them. If the Stochastic data is unavailable it fails open (does not block). This is the one piece of entry logic harvested from `Safe_Gold_Pro V3.1` — its martingale recovery tiers were deliberately not carried over.
+
+### 5. ADX trend-strength filter
+A breakout only follows through when there is a real trend behind it. ADX(M15, `InpAdxPeriod`) measures trend strength regardless of direction. An entry is rejected unless the last closed bar's ADX is at least `InpMinAdx` (default 22).
+
+This is distinct from the volatility gate: ATR can be high while ADX is low — a volatile market with no direction, i.e. exactly the chop where breakouts fail. The ADX filter is what removes those false breakouts. Like the Stochastic filter it fails open if data is missing.
+
+## Dynamic position slots and pyramiding
+
+The maximum number of *simultaneous* positions is not fixed — it scales with account balance:
+
+```
+max slots = clamp( floor(balance / InpBalancePerSlot), 1, InpMaxSlotsCap )
+```
+
+Crucially, extra positions are **pyramid adds, not a grid.** When `InpPyramidRiskFree=true` (default), a 2nd/3rd/… position opens only when **every position already open is at break-even or better** — its stop has been moved so it can no longer lose. Combined with same-direction-only adds, this means:
+
+- The newest position carries ~1R of risk; all older ones carry ~0.
+- Total stop-based open risk stays around **one trade's worth**, no matter how many positions are open.
+- Slots are therefore spent only on a trend that has already proven itself — you add with "house money", never average into a loser.
+
+This is the exact opposite of the martingale grid in `Safe_Gold_Pro` (which adds *bigger* lots into *losing* trades).
+
+**The one risk that does scale with slot count is a news gap.** A sudden 1-2 ATR spike (FOMC/CPI/NFP) can jump every break-even stop at once; worst-case single-event loss ≈ `open positions × risk per trade`. This is why the slot cap is kept modest (5 even on the aggressive preset). See `docs/RISK_LEVELS.md` for the full table.
 
 ## Dynamic position sizing
 
@@ -106,7 +130,7 @@ When any of these fires, the EA does not re-enter on the same bar; it waits for 
 
 - **Daily-loss circuit breaker.** If the day's loss exceeds `InpDailyLossPct` (4%) of the day's starting equity, no new entries open until the next day. Open positions are still managed. Protects against revenge-trading and clustered news-day losers.
 - **Dynamic spread filter.** Entries are blocked when spread exceeds `min(InpMaxSpreadAtrFrac × ATR, InpMaxSpreadHardPts)`.
-- **Session window** 13:00-22:00 server time (London + NY for GMT+2/+3 brokers) with a Friday cutoff 2h before close to avoid weekend gap risk.
+- **Session window** can be entered directly in **Thai time** (`InpHoursInThaiTime=true`, default 07:00-03:00 ICT). The EA converts it to broker server time using `InpBrokerGMTOffset` (3 in summer, 2 in winter) and prints the resolved server window — plus a terminal-detected offset cross-check — to the Experts log at attach. A Friday cutoff blocks new entries 2h before session end. Set `InpHoursInThaiTime=false` to enter the hours in server time instead.
 - **Weekend / holiday exit.** Using the broker's actual quote-session schedule (`SymbolInfoSessionQuote`, so DST and holidays are handled automatically), new entries are blocked `InpBlockNewMins` (120) minutes before the Friday or pre-holiday close, and all open positions are flattened `InpCloseAllMins` (15) minutes before it. Gold gaps hard over the weekend — this closes that exposure.
 - **Max one position per symbol.** No grid, no averaging into losers.
 - **Position adoption.** On attach/restart the EA adopts any pre-existing positions on its magic number so it keeps managing them (trend-flip and time-in-loss still apply; partial/failed-breakout are disabled for adopted trades since their history is unknown).

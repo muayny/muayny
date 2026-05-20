@@ -1,0 +1,99 @@
+; MuaynyGoldEA v3.1 — AGGRESSIVE preset for XAUUSD  (risk level ~8/10)
+; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then click "Load".
+;
+; Difference vs the DEFAULT preset:
+;   InpBaseRiskPct  0.50 -> 2.00   (risk per trade — 4x the default)
+;   InpDailyLossPct 4.0  -> 8.0
+;   InpDDStartPct   4.0  -> 6.0
+;   InpDDFullPct    12.0 -> 18.0
+;   InpBalancePerSlot 5000 -> 1500 ; InpMaxSlotsCap 2 -> 5
+;     -> slots: $5000 = 3, $7500 = 5, capped at 5
+;
+; READ THIS BEFORE USING:
+;   Extra positions are risk-free PYRAMID adds (a new one opens only when
+;   every existing one is at break-even), so normal stop-based risk stays
+;   ~1 trade's worth. BUT a sudden news gap jumps ALL open break-even stops
+;   at once. Worst-case single-event loss is roughly:
+;       open positions  x  risk per trade
+;   At 5 slots x 2% that is about -10% in one spike. The daily-loss breaker
+;   (8%) stops NEW entries but cannot undo a gap on positions already open.
+;
+; This is genuinely aggressive. Backtest the max drawdown and make sure you
+; can live through ~2x what the default preset shows before going live.
+;
+; NOT investment advice. See docs/RISK_LEVELS.md and docs/RISK_WARNING.md.
+
+InpTrendTF=16385
+InpTrendEMA=50
+
+InpEntryTF=15
+InpDonchianLen=20
+InpRequireMomentum=true
+
+InpUseStochFilter=true
+InpStochTF=30
+InpStochK=5
+InpStochD=3
+InpStochSlowing=3
+InpStochOB=80
+InpStochOS=20
+
+InpUseAdxFilter=true
+InpAdxPeriod=14
+InpMinAdx=22.0
+
+InpAtrPeriod=14
+InpAtrAvgPeriod=100
+InpAtrLoFactor=0.7
+InpAtrHiFactor=3.0
+
+InpBaseRiskPct=2.0
+InpAtrSlMult=1.5
+InpAtrTpMult=3.0
+InpMaxLot=5.0
+InpMinLot=0.01
+
+InpAdaptiveRisk=true
+InpDDStartPct=6.0
+InpDDFullPct=18.0
+InpRiskFloorFrac=0.35
+
+InpUseDailyStop=true
+InpDailyLossPct=8.0
+
+InpUsePartialTP=true
+InpPartialAtr=1.2
+InpPartialPct=50.0
+InpUseBreakEven=true
+InpBreakEvenAtr=0.7
+InpUseTrailing=true
+InpTrailStartAtr=1.0
+InpTrailAtrMult=1.2
+
+InpFailBreakoutExit=true
+InpTrendFlipExit=true
+InpMaxBarsInLoss=10
+
+InpMaxSpreadAtrFrac=0.25
+InpMaxSpreadHardPts=80
+
+InpHoursInThaiTime=true
+InpBrokerGMTOffset=3
+InpStartHour=7
+InpEndHour=3
+InpAvoidFriday=true
+
+InpDynamicSlots=true
+InpBalancePerSlot=1500.0
+InpMaxSlotsCap=5
+InpPyramidRiskFree=true
+InpMaxPositions=1
+
+InpUseWeekendExit=true
+InpBlockNewMins=120
+InpCloseAllMins=15
+
+InpShowDashboard=true
+
+InpMagic=20260520
+InpComment=MuaynyGold
