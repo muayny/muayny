@@ -1,0 +1,82 @@
+; MuaynyGoldEA v3 — MODERATE risk preset for XAUUSD  (risk level ~5/10)
+; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then on the chart
+; or in Strategy Tester click "Load" and pick this file.
+;
+; Difference vs MuaynyGoldEA_XAUUSD_default.set (which is ~3-4/10):
+;   InpBaseRiskPct  0.50 -> 1.00   (risk per trade doubled — the standard
+;                                   "moderate" textbook number)
+;   InpDailyLossPct 4.0  -> 5.0    (daily-loss circuit breaker)
+;   InpDDStartPct   4.0  -> 5.0    (adaptive scaler starts cutting later)
+;   InpDDFullPct    12.0 -> 15.0   (risk floor reached at a deeper drawdown)
+;
+; Everything else is identical to the default preset. The adaptive
+; drawdown scaler stays ON — it is what keeps a "5" from turning into a
+; "9" during a losing streak. Still one position at a time, no martingale.
+;
+; Expect both the monthly return AND the maximum drawdown to roughly
+; DOUBLE compared with the default preset. See docs/RISK_LEVELS.md.
+;
+; NOT investment advice. Backtest and forward-test before going live.
+
+InpTrendTF=16385
+InpTrendEMA=50
+
+InpEntryTF=15
+InpDonchianLen=20
+InpRequireMomentum=true
+
+InpUseStochFilter=true
+InpStochTF=30
+InpStochK=5
+InpStochD=3
+InpStochSlowing=3
+InpStochOB=80
+InpStochOS=20
+
+InpAtrPeriod=14
+InpAtrAvgPeriod=100
+InpAtrLoFactor=0.7
+InpAtrHiFactor=3.0
+
+InpBaseRiskPct=1.0
+InpAtrSlMult=1.5
+InpAtrTpMult=3.0
+InpMaxLot=5.0
+InpMinLot=0.01
+
+InpAdaptiveRisk=true
+InpDDStartPct=5.0
+InpDDFullPct=15.0
+InpRiskFloorFrac=0.35
+
+InpUseDailyStop=true
+InpDailyLossPct=5.0
+
+InpUsePartialTP=true
+InpPartialAtr=1.2
+InpPartialPct=50.0
+InpUseBreakEven=true
+InpBreakEvenAtr=0.7
+InpUseTrailing=true
+InpTrailStartAtr=1.0
+InpTrailAtrMult=1.2
+
+InpFailBreakoutExit=true
+InpTrendFlipExit=true
+InpMaxBarsInLoss=10
+
+InpMaxSpreadAtrFrac=0.25
+InpMaxSpreadHardPts=80
+InpStartHour=13
+InpEndHour=22
+InpAvoidFriday=true
+InpMaxPositions=1
+
+InpUseWeekendExit=true
+InpBlockNewMins=120
+InpCloseAllMins=15
+
+InpShowDashboard=true
+
+InpMagic=20260520
+InpComment=MuaynyGold

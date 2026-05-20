@@ -15,13 +15,19 @@ Strategy: **adaptive Donchian breakout aligned with a higher-timeframe trend fil
 ```
 MQL5/
   Experts/MuaynyGoldEA.mq5            # the EA source
-  Presets/MuaynyGoldEA_XAUUSD_default.set
+  Presets/MuaynyGoldEA_XAUUSD_default.set    # conservative,  risk ~3-4/10
+  Presets/MuaynyGoldEA_XAUUSD_moderate.set   # moderate,      risk ~5-6/10
 docs/
   STRATEGY.md                         # what the EA does and why
+  RISK_LEVELS.md                      # pick a risk level (0-10 scale)
   VPS_SETUP.md                        # how to run it 24/5 on a VPS
   BACKTEST.md                         # how to backtest it honestly
   RISK_WARNING.md                     # please read
 ```
+
+Two presets ship: the **default** (conservative, ~3-4/10) and the
+**moderate** (~5-6/10, risks 1% per trade). See `docs/RISK_LEVELS.md` to
+choose, or to build a conservative (1-2/10) or aggressive (7-8/10) profile.
 
 ---
 
