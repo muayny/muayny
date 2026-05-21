@@ -136,6 +136,7 @@ When any of these fires, the EA does not re-enter on the same bar; it waits for 
 - **Weekend / holiday exit.** Using the broker's actual quote-session schedule (`SymbolInfoSessionQuote`, so DST and holidays are handled automatically), new entries are blocked `InpBlockNewMins` (120) minutes before the Friday or pre-holiday close, and all open positions are flattened `InpCloseAllMins` (15) minutes before it. Gold gaps hard over the weekend — this closes that exposure.
 - **Max one position per symbol.** No grid, no averaging into losers.
 - **Position adoption.** On attach/restart the EA adopts any pre-existing positions on its magic number so it keeps managing them (trend-flip and time-in-loss still apply; partial/failed-breakout are disabled for adopted trades since their history is unknown).
+- **Manual-trade protection** (optional, `InpProtectManual`). Trades you open by hand (magic 0) are normally invisible to the EA — it manages only its own magic number. With this option on, the EA additionally applies a protective SL (`InpManualSlAtrMult` × ATR) to any hand-opened gold trade that has none, then break-even and ATR trailing, and flattens them with the weekend exit. It never opens a manual trade and never closes one on a strategy signal — only stop management and the weekend close. Trades from other EAs (other magic numbers) are never touched.
 
 ## What this strategy is NOT
 

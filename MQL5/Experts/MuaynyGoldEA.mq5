@@ -4,6 +4,12 @@
 //|  Adaptive Donchian-breakout Expert Advisor tuned for XAUUSD       |
 //|  (Gold) on a high-volatility regime.                              |
 //|                                                                  |
+//|  v3.30 — optional protection for hand-opened (manual, magic 0)    |
+//|  trades: a protective SL, break-even and ATR trailing can be      |
+//|  applied to your own trades, and they are flattened with the      |
+//|  weekend exit. The EA never opens or signal-closes a manual       |
+//|  trade. Off by default (InpProtectManual).                        |
+//|                                                                  |
 //|  v3.20 — Stochastic filter no longer vetoes entries in the        |
 //|  overbought/oversold zone by default (that fought the trend-      |
 //|  following logic and skipped strong-trend breakouts); it now      |
@@ -51,7 +57,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Muayny"
 #property link      ""
-#property version   "3.20"
+#property version   "3.30"
 #property strict
 #property description "Adaptive XAUUSD Donchian-breakout EA: balance-scaled sizing & slots, ADX/Stoch filters, self-correcting exits, profit locking, weekend exit, daily-loss breaker."
 
@@ -143,6 +149,10 @@ input group "=== Weekend / Holiday Exit ==="
 input bool            InpUseWeekendExit = true;         // Close positions before the weekend / holiday gap
 input int             InpBlockNewMins   = 120;          // Block new entries N minutes before Fri/pre-holiday close
 input int             InpCloseAllMins   = 15;           // Close all own positions N minutes before that close
+
+input group "=== Manual Trade Protection ==="
+input bool            InpProtectManual  = false;        // Manage hand-opened (magic 0) trades on this symbol
+input double          InpManualSlAtrMult= 3.0;          // Protective SL for a manual trade with no SL (x ATR)
 
 input group "=== Dashboard ==="
 input bool            InpShowDashboard  = true;         // Draw the on-chart status panel
@@ -285,7 +295,10 @@ void OnTick()
    g_uiAtrOk  = atrOk;
 
    if(atrOk)
+     {
       ManagePositionsTick(atrNow);
+      ManageManualPositions(atrNow);
+     }
 
    // Weekend/holiday exit runs every tick so positions close promptly.
    bool weekendBlock = ManageWeekendExit();
@@ -608,6 +621,86 @@ void ManagePositionsTick(double atrVal)
   }
 
 //+------------------------------------------------------------------+
+//| Clamp a stop price to the valid side of the market, respecting    |
+//| the broker minimum stop distance.                                 |
+//+------------------------------------------------------------------+
+double ClampStopToMarket(int dir, double sl)
+  {
+   long   stopLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopLvl + 5) * _Point;
+   double bid     = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask     = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if(dir > 0)
+     {
+      double maxSL = bid - minDist;
+      if(sl > maxSL) sl = maxSL;
+     }
+   else
+     {
+      double minSL = ask + minDist;
+      if(sl < minSL) sl = minSL;
+     }
+   return sl;
+  }
+
+//+------------------------------------------------------------------+
+//| Manual-trade protection (opt-in via InpProtectManual): applies a  |
+//| protective SL, break-even and ATR trailing to hand-opened         |
+//| (magic 0) positions. Never opens or signal-closes a manual trade. |
+//+------------------------------------------------------------------+
+void ManageManualPositions(double atrVal)
+  {
+   if(!InpProtectManual || atrVal <= 0.0) return;
+
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != 0) continue; // magic 0 = hand-opened
+
+      ulong  ticket    = pos.Ticket();
+      int    dir       = (pos.PositionType() == POSITION_TYPE_BUY) ? 1 : -1;
+      double openPrice = pos.PriceOpen();
+      double curPrice  = pos.PriceCurrent();
+      double curSL     = pos.StopLoss();
+      double curTP     = pos.TakeProfit();
+
+      // 1) protective ("catastrophic") SL if the trade has none
+      if(curSL == 0.0)
+        {
+         double protSL = (dir > 0) ? openPrice - atrVal * InpManualSlAtrMult
+                                   : openPrice + atrVal * InpManualSlAtrMult;
+         protSL = NormalizeDouble(ClampStopToMarket(dir, protSL), _Digits);
+         if(g_trade.PositionModify(ticket, protSL, curTP))
+            PrintFormat("MuaynyGoldEA: protective SL %.*f applied to manual #%I64u.",
+                        _Digits, protSL, ticket);
+         continue; // let the new SL settle; BE/trailing handled on later ticks
+        }
+
+      // 2) profit protection (only when in profit)
+      double profit = (dir > 0) ? (curPrice - openPrice) : (openPrice - curPrice);
+      if(profit <= 0.0) continue;
+      double profitAtr = profit / atrVal;
+
+      if(InpUseBreakEven && profitAtr >= InpBreakEvenAtr)
+        {
+         double beSL = NormalizeDouble(openPrice + dir * _Point, _Digits);
+         if(IsStopImprovement(dir, curSL, beSL))
+           {
+            g_trade.PositionModify(ticket, beSL, curTP);
+            curSL = beSL;
+           }
+        }
+      if(InpUseTrailing && profitAtr >= InpTrailStartAtr)
+        {
+         double newSL = NormalizeDouble(curPrice - dir * atrVal * InpTrailAtrMult, _Digits);
+         if(IsStopImprovement(dir, curSL, newSL))
+            g_trade.PositionModify(ticket, newSL, curTP);
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 //| Per-bar management: self-correcting exits. Returns true if any    |
 //| position was closed.                                              |
 //+------------------------------------------------------------------+
@@ -745,6 +838,23 @@ bool CloseAllOwnPositions(string reason)
      {
       if(!pos.SelectByIndex(i)) continue;
       if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+      if(CloseOwnPosition(pos.Ticket(), reason))
+         closedAny = true;
+     }
+   return closedAny;
+  }
+
+//+------------------------------------------------------------------+
+//| Close every hand-opened (magic 0) position on this symbol         |
+//+------------------------------------------------------------------+
+bool CloseManualPositions(string reason)
+  {
+   bool closedAny = false;
+   CPositionInfo pos;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != 0) continue;
       if(CloseOwnPosition(pos.Ticket(), reason))
          closedAny = true;
      }
@@ -1003,6 +1113,8 @@ bool ManageWeekendExit()
          CloseAllOwnPositions("weekend-exit");
          PruneStates();
         }
+      if(InpProtectManual)
+         CloseManualPositions("weekend-exit");
       return true;
      }
 
@@ -1080,11 +1192,11 @@ void DrawDashboard()
    ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, 6);
    ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, 14);
    ObjectSetInteger(0, bg, OBJPROP_XSIZE, 270);
-   ObjectSetInteger(0, bg, OBJPROP_YSIZE, 212);
+   ObjectSetInteger(0, bg, OBJPROP_YSIZE, 230);
 
    bool algoOn = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)
                  && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
-   UiLabel("title", x, y, "MuaynyGoldEA v3.2", clrGold, 10);
+   UiLabel("title", x, y, "MuaynyGoldEA v3.3", clrGold, 10);
    UiLabel("algo", x + 170, y, algoOn ? "ALGO ON" : "ALGO OFF",
            algoOn ? clrLime : clrRed, 8);
    y += lh + 4;
@@ -1147,6 +1259,23 @@ void DrawDashboard()
                                   posVol, posPL);
    UiLabel("pos", x, y, posTxt,
            (posN == 0 ? clrSilver : (posPL >= 0.0 ? clrLime : clrTomato)), 9);
+   y += lh;
+
+   int    manN  = 0;
+   double manPL = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != 0) continue;
+      manN++;
+      manPL += pos.Profit() + pos.Swap();
+     }
+   string manTxt = (manN == 0)
+                   ? "Manual:      none"
+                   : StringFormat("Manual: %d  PL %.2f  %s", manN, manPL,
+                                  InpProtectManual ? "protected" : "not managed");
+   UiLabel("manual", x, y, manTxt,
+           (manN == 0 ? clrSilver : (InpProtectManual ? clrAqua : clrKhaki)), 9);
    y += lh;
 
    string stateTxt = g_dayHalted ? "DAILY HALT" : g_uiState;

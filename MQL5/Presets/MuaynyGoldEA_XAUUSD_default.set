@@ -84,6 +84,9 @@ InpUseWeekendExit=true
 InpBlockNewMins=120
 InpCloseAllMins=15
 
+InpProtectManual=true
+InpManualSlAtrMult=3.0
+
 InpShowDashboard=true
 
 InpMagic=20260520
