@@ -1,4 +1,4 @@
-; MuaynyGoldEA v3.1 — DEFAULT (conservative) preset for XAUUSD  (risk ~3-4/10)
+; MuaynyGoldEA v3.5 — DEFAULT (conservative) preset for XAUUSD  (risk ~3-4/10)
 ; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then click "Load".
 ;
 ; Session is entered in THAI time (ICT, UTC+7): 07:00 -> 03:00 next day.
@@ -57,13 +57,13 @@ InpUseDailyStop=true
 InpDailyLossPct=4.0
 
 InpUsePartialTP=true
-InpPartialAtr=1.2
-InpPartialPct=50.0
+InpPartialAtr=1.5
+InpPartialPct=40.0
 InpUseBreakEven=true
-InpBreakEvenAtr=0.7
+InpBreakEvenAtr=1.0
 InpUseTrailing=true
-InpTrailStartAtr=1.0
-InpTrailAtrMult=1.2
+InpTrailStartAtr=1.8
+InpTrailAtrMult=1.8
 
 InpFailBreakoutExit=true
 InpTrendFlipExit=true

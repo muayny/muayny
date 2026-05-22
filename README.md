@@ -43,7 +43,7 @@ news-gap math that explains why the position-slot cap stays at 5.
 | Volatility gate   | ATR(M15,14) within 0.7×-3.0× of its 100-bar average (adaptive)   |
 | Stop loss         | 1.5 × ATR(M15)                                                   |
 | Take profit       | 3.0 × ATR(M15), with a partial close along the way               |
-| Profit locking    | Close 50% at +1.2 ATR, move SL to break-even, trail the runner   |
+| Profit locking    | Close 40% at +1.5 ATR, move SL to break-even, trail the runner   |
 | Position sizing   | % of **live equity** — lot scales up as the account grows        |
 | Position slots    | Max simultaneous positions scale with balance (pyramid, not grid)|
 | Adaptive risk     | Risk % cut automatically while in drawdown, restored on recovery |

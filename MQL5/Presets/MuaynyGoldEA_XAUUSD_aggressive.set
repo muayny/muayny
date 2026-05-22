@@ -1,4 +1,4 @@
-; MuaynyGoldEA v3.1 — AGGRESSIVE preset for XAUUSD  (risk level ~8/10)
+; MuaynyGoldEA v3.5 — AGGRESSIVE preset for XAUUSD  (risk level ~8/10)
 ; Load in MT5: drop into <MT5 data folder>/MQL5/Presets, then click "Load".
 ;
 ; Difference vs the DEFAULT preset:
@@ -67,13 +67,13 @@ InpUseDailyStop=true
 InpDailyLossPct=8.0
 
 InpUsePartialTP=true
-InpPartialAtr=1.2
-InpPartialPct=50.0
+InpPartialAtr=1.5
+InpPartialPct=40.0
 InpUseBreakEven=true
-InpBreakEvenAtr=0.7
+InpBreakEvenAtr=1.0
 InpUseTrailing=true
-InpTrailStartAtr=1.0
-InpTrailAtrMult=1.2
+InpTrailStartAtr=1.8
+InpTrailAtrMult=1.8
 
 InpFailBreakoutExit=true
 InpTrendFlipExit=true

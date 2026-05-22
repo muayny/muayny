@@ -124,14 +124,16 @@ The effect compounds in your favour: in a drawdown, both equity is lower **and**
 
 Both are normalised and pushed outside the broker's `SYMBOL_TRADE_STOPS_LEVEL`.
 
+The profit-locking triggers below are set in units of **R** — where R = the 1.5 × ATR stop = the risk on the trade — so they protect the documented 1:2 risk:reward instead of collapsing it. Banking and trailing winners before they have even covered 1R pulls the average win below the average loss, which turns a coin-flip win rate into a slow bleed.
+
 ### Partial take-profit
-When a trade is up by `InpPartialAtr` × ATR (default 1.2), the EA closes `InpPartialPct`% (default 50%) of the original volume — banking realised profit — and immediately moves the remaining position's SL to break-even. After this, the trade can no longer become a net loser (barring slippage/gaps).
+When a trade is up by `InpPartialAtr` × ATR (default 1.5 — exactly the stop distance, i.e. +1R), the EA closes `InpPartialPct`% (default 40%) of the original volume — banking realised profit — and immediately moves the remaining position's SL to break-even. After this, the trade can no longer become a net loser (barring slippage/gaps), and the 60% runner is free to reach the 3.0 × ATR (2R) target.
 
 If the position is too small to split without leaving a sub-minimum remainder, the partial is skipped cleanly and the whole position rides the trailing stop instead.
 
 ### Break-even and trailing
-- After `InpBreakEvenAtr` × ATR (0.7) of profit, SL moves to break-even.
-- After `InpTrailStartAtr` × ATR (1.0) of profit, SL trails `InpTrailAtrMult` × ATR (1.2) behind price.
+- After `InpBreakEvenAtr` × ATR (1.0) of profit, SL moves to break-even.
+- After `InpTrailStartAtr` × ATR (1.8) of profit, SL trails `InpTrailAtrMult` × ATR (1.8) behind price.
 
 Stops only ever move in the favourable direction — they never loosen.
 

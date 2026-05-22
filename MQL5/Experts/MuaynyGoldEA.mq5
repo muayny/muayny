@@ -4,6 +4,13 @@
 //|  Adaptive Donchian-breakout Expert Advisor tuned for XAUUSD       |
 //|  (Gold) on a high-volatility regime.                              |
 //|                                                                  |
+//|  v3.50 — profit-locking rebalanced to preserve the 1:2 R:R.      |
+//|  Old triggers banked and trailed winners so early the            |
+//|  average win fell below the average loss — a coin-flip           |
+//|  win rate then bleeds. Triggers are now stated in units          |
+//|  of risk (R = the 1.5-ATR stop): break-even at 1.0 ATR,          |
+//|  partial 40% at 1.5 ATR (+1R), trail 1.8 ATR from 1.8 ATR.        |
+//|                                                                  |
 //|  v3.40 — regime filter: a Kaufman Efficiency Ratio gate blocks    |
 //|  new entries while the market is choppy / ranging — the known     |
 //|  failure mode of a breakout strategy. ER near 1 = clean trend,    |
@@ -63,7 +70,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Muayny"
 #property link      ""
-#property version   "3.40"
+#property version   "3.50"
 #property strict
 #property description "Adaptive XAUUSD Donchian-breakout EA: balance-scaled sizing & slots, ADX/Stoch/chop filters, self-correcting exits, profit locking, weekend exit, daily-loss breaker."
 
@@ -125,13 +132,13 @@ input double          InpDailyLossPct   = 4.0;          // Halt if daily loss ex
 
 input group "=== Profit Locking ==="
 input bool            InpUsePartialTP   = true;         // Take partial profit at a milestone
-input double          InpPartialAtr     = 1.2;          // Partial-TP trigger (ATR of favorable move)
-input double          InpPartialPct     = 50.0;         // Percent of initial volume to close at partial
+input double          InpPartialAtr     = 1.5;          // Partial-TP trigger (ATR of favorable move)
+input double          InpPartialPct     = 40.0;         // Percent of initial volume to close at partial
 input bool            InpUseBreakEven   = true;         // Move SL to break-even
-input double          InpBreakEvenAtr   = 0.7;          // Move to BE after this many ATR of profit
+input double          InpBreakEvenAtr   = 1.0;          // Move to BE after this many ATR of profit
 input bool            InpUseTrailing    = true;         // Enable ATR trailing stop
-input double          InpTrailStartAtr  = 1.0;          // Start trailing after N x ATR profit
-input double          InpTrailAtrMult   = 1.2;          // Trailing distance in ATR
+input double          InpTrailStartAtr  = 1.8;          // Start trailing after N x ATR profit
+input double          InpTrailAtrMult   = 1.8;          // Trailing distance in ATR
 
 input group "=== Self-Correction (cut losers early) ==="
 input bool            InpFailBreakoutExit= true;        // Exit if price closes back through the breakout level
@@ -1246,7 +1253,7 @@ void DrawDashboard()
 
    bool algoOn = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)
                  && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
-   UiLabel("title", x, y, "MuaynyGoldEA v3.4", clrGold, 10);
+   UiLabel("title", x, y, "MuaynyGoldEA v3.5", clrGold, 10);
    UiLabel("algo", x + 170, y, algoOn ? "ALGO ON" : "ALGO OFF",
            algoOn ? clrLime : clrRed, 8);
    y += lh + 4;
