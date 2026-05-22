@@ -23,7 +23,7 @@ There are deliberately no hand-tuned, broker-specific point thresholds (except o
 | Spread cap | A fraction of current ATR |
 | SL / TP / trailing | ATR — wider stops in volatile regimes, tighter in calm ones |
 
-## Entry — five aligned checks
+## Entry — six aligned checks
 
 ### 1. Trend filter — H1 EMA(50)
 Longs only when the last closed H1 bar closed above EMA(50); shorts only when below. Filters out the half of signals that fade the prevailing bias.
@@ -57,6 +57,23 @@ The filter only ever blocks entries; it never creates them. If the Stochastic da
 A breakout only follows through when there is a real trend behind it. ADX(M15, `InpAdxPeriod`) measures trend strength regardless of direction. An entry is rejected unless the last closed bar's ADX is at least `InpMinAdx` (default 18 — ADX above ~18-20 indicates a developing or established trend).
 
 This is distinct from the volatility gate: ATR can be high while ADX is low — a volatile market with no direction, i.e. exactly the chop where breakouts fail. The ADX filter is what removes those false breakouts. Like the Stochastic filter it fails open if data is missing.
+
+### 6. Regime filter — Kaufman Efficiency Ratio
+
+The single biggest failure mode of any breakout strategy is a sideways, choppy market: a breakout fires at the top of a range, price snaps back, and the trade hits its stop within minutes. ADX catches *some* of this, but ADX can sit in a grey zone (~15-22) for a long time while price still whipsaws.
+
+The regime filter measures *directional efficiency* directly. Over the last `InpEfficiencyPeriod` closed M15 bars (default 14) it computes the **Kaufman Efficiency Ratio**:
+
+```
+ER = |close[now] - close[N bars ago]|  /  sum of |bar-to-bar moves|
+```
+
+- **ER near 1** — price travelled in a near-straight line: a clean, efficient trend.
+- **ER near 0** — price moved a lot but ended up where it started: pure chop.
+
+An entry is rejected unless `ER >= InpMinEfficiency` (default 0.35). In a tight range the numerator (net move) collapses while the denominator (total path) stays large, so ER drops and entries are blocked precisely when breakouts are least reliable. The live ER and a `trend` / `CHOP` verdict are shown on the dashboard. The filter only blocks entries, never creates them, and fails open if price data is unavailable.
+
+> The 0.35 default is a reasonable starting point, **not** an optimised value — it must be validated and tuned per broker with a multi-year backtest (see `docs/BACKTEST.md`).
 
 ## Dynamic position slots and pyramiding
 

@@ -33,6 +33,10 @@ InpUseAdxFilter=true
 InpAdxPeriod=14
 InpMinAdx=18.0
 
+InpUseRegimeFilter=true
+InpEfficiencyPeriod=14
+InpMinEfficiency=0.35
+
 InpAtrPeriod=14
 InpAtrAvgPeriod=100
 InpAtrLoFactor=0.7

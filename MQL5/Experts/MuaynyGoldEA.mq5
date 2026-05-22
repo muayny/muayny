@@ -4,6 +4,12 @@
 //|  Adaptive Donchian-breakout Expert Advisor tuned for XAUUSD       |
 //|  (Gold) on a high-volatility regime.                              |
 //|                                                                  |
+//|  v3.40 — regime filter: a Kaufman Efficiency Ratio gate blocks    |
+//|  new entries while the market is choppy / ranging — the known     |
+//|  failure mode of a breakout strategy. ER near 1 = clean trend,    |
+//|  near 0 = chop. Tunable via InpMinEfficiency and shown live on    |
+//|  the dashboard.                                                   |
+//|                                                                  |
 //|  v3.30 — optional protection for hand-opened (manual, magic 0)    |
 //|  trades: a protective SL, break-even and ATR trailing can be      |
 //|  applied to your own trades, and they are flattened with the      |
@@ -57,9 +63,9 @@
 //+------------------------------------------------------------------+
 #property copyright "Muayny"
 #property link      ""
-#property version   "3.30"
+#property version   "3.40"
 #property strict
-#property description "Adaptive XAUUSD Donchian-breakout EA: balance-scaled sizing & slots, ADX/Stoch filters, self-correcting exits, profit locking, weekend exit, daily-loss breaker."
+#property description "Adaptive XAUUSD Donchian-breakout EA: balance-scaled sizing & slots, ADX/Stoch/chop filters, self-correcting exits, profit locking, weekend exit, daily-loss breaker."
 
 #include <Trade/Trade.mqh>
 #include <Trade/PositionInfo.mqh>
@@ -88,6 +94,11 @@ input group "=== ADX Entry-Timing Filter ==="
 input bool            InpUseAdxFilter   = true;         // Require a minimum trend strength to enter
 input int             InpAdxPeriod      = 14;           // ADX period
 input double          InpMinAdx         = 18.0;         // Minimum ADX (trend strength) for an entry
+
+input group "=== Regime Filter (chop / sideway) ==="
+input bool            InpUseRegimeFilter = true;        // Block new entries when the market is choppy / ranging
+input int             InpEfficiencyPeriod= 14;          // Bars for the Kaufman Efficiency Ratio
+input double          InpMinEfficiency   = 0.35;        // Min Efficiency Ratio to enter (0 = chop ... 1 = clean trend)
 
 input group "=== Adaptive Volatility Gate ==="
 input int             InpAtrPeriod      = 14;           // ATR period
@@ -336,6 +347,8 @@ void OnTick()
    if(atrNow < InpAtrLoFactor * atrAvg)        { g_uiState = "ATR too quiet";  return; }
    if(atrNow > InpAtrHiFactor * atrAvg)        { g_uiState = "ATR shock";      return; }
 
+   if(!RegimeConfirms())                       { g_uiState = "chop / sideway"; return; }
+
    double triggerLevel = 0.0;
    int signal = GetBreakoutSignal(trend, triggerLevel);
    if(signal == 0)                            { g_uiState = "waiting breakout"; return; }
@@ -448,6 +461,43 @@ bool AdxConfirms()
    ArraySetAsSeries(adx, true);
    if(CopyBuffer(hAdx, MAIN_LINE, 0, 2, adx) < 2) return true;
    return (adx[1] >= InpMinAdx);
+  }
+
+//+------------------------------------------------------------------+
+//| Kaufman Efficiency Ratio over the last InpEfficiencyPeriod closed |
+//| bars of the entry timeframe. ER = |net move| / |path length|:     |
+//| ~1 = clean directional trend, ~0 = choppy range. Returns -1 when  |
+//| price data is unavailable.                                        |
+//+------------------------------------------------------------------+
+double ComputeEfficiencyRatio()
+  {
+   int period = InpEfficiencyPeriod;
+   if(period < 2) return -1.0;
+
+   double close[];
+   if(CopyClose(_Symbol, InpEntryTF, 1, period + 1, close) < period + 1)
+      return -1.0;
+
+   double direction  = MathAbs(close[period] - close[0]);
+   double volatility = 0.0;
+   for(int i = 1; i <= period; i++)
+      volatility += MathAbs(close[i] - close[i - 1]);
+   if(volatility <= 0.0) return 0.0;
+
+   return direction / volatility;
+  }
+
+//+------------------------------------------------------------------+
+//| Regime filter: blocks new entries while the market is choppy /    |
+//| ranging (the failure mode of a breakout strategy). Fails open if  |
+//| price data is missing.                                            |
+//+------------------------------------------------------------------+
+bool RegimeConfirms()
+  {
+   if(!InpUseRegimeFilter) return true;
+   double er = ComputeEfficiencyRatio();
+   if(er < 0.0) return true;            // no data → fail open
+   return (er >= InpMinEfficiency);
   }
 
 //+------------------------------------------------------------------+
@@ -1192,11 +1242,11 @@ void DrawDashboard()
    ObjectSetInteger(0, bg, OBJPROP_XDISTANCE, 6);
    ObjectSetInteger(0, bg, OBJPROP_YDISTANCE, 14);
    ObjectSetInteger(0, bg, OBJPROP_XSIZE, 270);
-   ObjectSetInteger(0, bg, OBJPROP_YSIZE, 230);
+   ObjectSetInteger(0, bg, OBJPROP_YSIZE, 246);
 
    bool algoOn = (bool)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)
                  && (bool)MQLInfoInteger(MQL_TRADE_ALLOWED);
-   UiLabel("title", x, y, "MuaynyGoldEA v3.3", clrGold, 10);
+   UiLabel("title", x, y, "MuaynyGoldEA v3.4", clrGold, 10);
    UiLabel("algo", x + 170, y, algoOn ? "ALGO ON" : "ALGO OFF",
            algoOn ? clrLime : clrRed, 8);
    y += lh + 4;
@@ -1219,6 +1269,25 @@ void DrawDashboard()
    else if(g_uiAtrNow > InpAtrHiFactor*g_uiAtrAvg) { atrTxt += "SHOCK";     atrClr = clrTomato; }
    else                                            { atrTxt += "OK";        atrClr = clrLime; }
    UiLabel("atr", x, y, atrTxt, atrClr, 9);
+   y += lh;
+
+   string regTxt = "Trend qual.: ";
+   color  regClr = clrSilver;
+   if(!InpUseRegimeFilter)
+      regTxt += "filter off";
+   else
+     {
+      double er = ComputeEfficiencyRatio();
+      if(er < 0.0)
+         regTxt += "warming up";
+      else
+        {
+         regTxt += StringFormat("ER %.2f  %s", er,
+                                (er >= InpMinEfficiency ? "trend" : "CHOP"));
+         regClr = (er >= InpMinEfficiency) ? clrLime : clrKhaki;
+        }
+     }
+   UiLabel("regime", x, y, regTxt, regClr, 9);
    y += lh;
 
    UiLabel("risk", x, y,
